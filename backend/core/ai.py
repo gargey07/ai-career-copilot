@@ -1,0 +1,158 @@
+"""
+AI Provider Abstraction Layer
+─────────────────────────────
+All AI calls go through this interface.
+Swap providers (Gemini → OpenAI → Claude) in one place — zero business logic changes.
+
+Usage:
+    from core.ai import get_ai_provider
+    ai = get_ai_provider()
+    text = await ai.generate_text(prompt)
+    embedding = await ai.embed_text(resume_text)
+"""
+from __future__ import annotations
+import time
+import logging
+from abc import ABC, abstractmethod
+from typing import Optional
+
+import google.generativeai as genai
+
+from core.config import get_settings
+
+logger = logging.getLogger(__name__)
+settings = get_settings()
+
+# Rate limiting: Gemini free tier = 15 RPM
+_GEMINI_MIN_DELAY = 4.0  # seconds between requests (60s / 15 RPM = 4s)
+_last_gemini_call = 0.0
+
+
+# ── Abstract Base ─────────────────────────────────────────────────────────────
+class AIProvider(ABC):
+    """Abstract base class for all AI providers."""
+
+    @abstractmethod
+    async def generate_text(self, prompt: str, temperature: float = 0.3) -> str:
+        """Generate text from a prompt."""
+        ...
+
+    @abstractmethod
+    async def embed_text(self, text: str) -> list[float]:
+        """Convert text to a vector embedding."""
+        ...
+
+
+# ── Gemini Provider ───────────────────────────────────────────────────────────
+class GeminiProvider(AIProvider):
+    """Google Gemini AI provider (Gemini 1.5 Flash — free tier)."""
+
+    def __init__(self):
+        genai.configure(api_key=settings.gemini_api_key)
+        self.model = genai.GenerativeModel("gemini-2.5-flash")
+        self.embed_model = "models/gemini-embedding-001"
+        logger.info("✅ Gemini AI provider initialized (gemini-2.5-flash)")
+
+    async def generate_text(self, prompt: str, temperature: float = 0.3) -> str:
+        """
+        Calls Gemini to generate text.
+        Automatically respects the 15 RPM rate limit with sleep().
+        """
+        global _last_gemini_call
+
+        # Rate limiting: enforce minimum delay between calls
+        elapsed = time.time() - _last_gemini_call
+        if elapsed < _GEMINI_MIN_DELAY:
+            wait = _GEMINI_MIN_DELAY - elapsed
+            logger.debug(f"⏳ Gemini rate limit: waiting {wait:.1f}s")
+            time.sleep(wait)
+
+        try:
+            response = self.model.generate_content(
+                prompt,
+                generation_config=genai.GenerationConfig(temperature=temperature),
+            )
+            _last_gemini_call = time.time()
+            return response.text.strip()
+        except Exception as e:
+            logger.error(f"❌ Gemini generate_text failed: {e}")
+            raise
+
+    async def embed_text(self, text: str) -> list[float]:
+        """Embeds text using Gemini's text-embedding model."""
+        try:
+            result = genai.embed_content(
+                model=self.embed_model,
+                content=text,
+                task_type="RETRIEVAL_DOCUMENT",
+                output_dimensionality=768,  # match vector(768) in Supabase schema
+            )
+            return result["embedding"]
+        except Exception as e:
+            logger.error(f"❌ Gemini embed_text failed: {e}")
+            raise
+
+
+# ── OpenAI Provider (Fallback) ────────────────────────────────────────────────
+class OpenAIProvider(AIProvider):
+    """OpenAI provider — used as fallback if Gemini is unavailable."""
+
+    def __init__(self):
+        from openai import AsyncOpenAI
+        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+        logger.info("✅ OpenAI provider initialized")
+
+    async def generate_text(self, prompt: str, temperature: float = 0.3) -> str:
+        response = await self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+        )
+        return response.choices[0].message.content.strip()
+
+    async def embed_text(self, text: str) -> list[float]:
+        response = await self.client.embeddings.create(
+            model="text-embedding-3-small",
+            input=text,
+        )
+        return response.data[0].embedding
+
+
+# ── Factory ───────────────────────────────────────────────────────────────────
+_provider_instance: Optional[AIProvider] = None
+
+
+def get_ai_provider() -> AIProvider:
+    """
+    Returns the configured AI provider as a singleton.
+    Provider is set via AI_PROVIDER env var: 'gemini' | 'openai'
+    """
+    global _provider_instance
+    if _provider_instance is None:
+        provider = settings.ai_provider.lower()
+        if provider == "gemini":
+            _provider_instance = GeminiProvider()
+        elif provider == "openai":
+            _provider_instance = OpenAIProvider()
+        else:
+            raise ValueError(f"Unknown AI provider: '{provider}'. Use 'gemini' or 'openai'.")
+    return _provider_instance
+
+
+# ── Quick test ────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    import asyncio
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    async def test():
+        ai = get_ai_provider()
+        print(f"Testing provider: {settings.ai_provider}")
+
+        result = await ai.generate_text("Say 'AI Career Copilot is ready!' in one sentence.")
+        print(f"✅ Text generation: {result}")
+
+        embedding = await ai.embed_text("UI/UX Designer with 3 years experience in Figma")
+        print(f"✅ Embedding: {len(embedding)} dimensions")
+
+    asyncio.run(test())

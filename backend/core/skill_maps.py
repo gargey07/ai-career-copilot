@@ -1,0 +1,338 @@
+"""
+Skill Maps — Per-category skill expansion & job search config
+─────────────────────────────────────────────────────────────
+When a user says "I know Figma" we know they also imply
+prototyping, wireframing, dev handoff, etc.
+
+This file defines:
+  1. JOB_CATEGORIES  — all supported job categories
+  2. SKILL_EXPANSION — core skill → implied skills per category
+  3. expand_skills() — main function used by optimizer
+"""
+
+# ── Category Definitions ──────────────────────────────────────────────────────
+
+JOB_CATEGORIES = {
+    "ui_ux_designer": {
+        "label": "UI/UX Designer",
+        "search_queries": ["UI UX Designer", "Product Designer", "UX Designer"],
+        "target_roles": [
+            "UI/UX Designer", "Product Designer", "Visual Designer",
+            "Interaction Designer", "UX Researcher", "UX Writer",
+            "Motion Designer", "Design Lead",
+        ],
+        "tools": [
+            "Figma", "Adobe XD", "Sketch", "Illustrator", "Photoshop",
+            "After Effects", "InDesign", "Principle", "Framer", "Webflow",
+            "Maze", "Hotjar", "Miro", "FigJam", "Zeplin", "Notion",
+            "UserTesting", "Optimal Workshop", "Lottie",
+        ],
+        "skills": [
+            "User Research", "Usability Testing", "Wireframing", "Prototyping",
+            "Design Systems", "Information Architecture", "User Flows",
+            "Journey Mapping", "A/B Testing", "Heatmap Analysis",
+            "Motion Design", "Accessibility", "Responsive Design",
+            "Visual Hierarchy", "Typography", "Color Theory",
+            "Interaction Design", "Design Thinking", "Stakeholder Presentations",
+            "Design Critique", "Micro-interactions",
+        ],
+    },
+    "frontend_developer": {
+        "label": "Frontend Developer",
+        "search_queries": ["Frontend Developer", "React Developer", "UI Developer"],
+        "target_roles": [
+            "Frontend Developer", "React Developer", "UI Developer",
+            "JavaScript Developer", "Vue Developer", "Angular Developer",
+        ],
+        "tools": [
+            "React", "Next.js", "Vue", "Angular", "TypeScript", "JavaScript",
+            "HTML", "CSS", "Tailwind CSS", "SASS", "Redux", "Zustand",
+            "GraphQL", "Webpack", "Vite", "Jest", "Cypress", "Storybook",
+            "Git", "GitHub", "Figma", "VS Code", "Chrome DevTools",
+        ],
+        "skills": [
+            "Responsive Design", "Accessibility (WCAG)", "Performance Optimization",
+            "Cross-browser Compatibility", "Component Architecture",
+            "State Management", "REST API Integration", "Code Review",
+            "Unit Testing", "CI/CD", "SEO Basics", "Web Vitals",
+            "Agile/Scrum", "Technical Documentation",
+        ],
+    },
+    "backend_developer": {
+        "label": "Backend Developer",
+        "search_queries": ["Backend Developer", "Node.js Developer", "Python Developer"],
+        "target_roles": [
+            "Backend Developer", "Node.js Developer", "Python Developer",
+            "Java Developer", "Go Developer", "API Developer",
+        ],
+        "tools": [
+            "Python", "Node.js", "Java", "Go", "Ruby", "PHP",
+            "FastAPI", "Django", "Express", "Spring Boot",
+            "PostgreSQL", "MySQL", "MongoDB", "Redis", "Elasticsearch",
+            "Docker", "Kubernetes", "AWS", "GCP", "Azure",
+            "Git", "Postman", "Terraform", "Nginx",
+        ],
+        "skills": [
+            "REST API Design", "GraphQL", "Microservices", "System Design",
+            "Database Design", "Query Optimization", "Authentication & Auth",
+            "Caching Strategies", "Message Queues", "CI/CD Pipelines",
+            "Security Best Practices", "Code Review", "Agile/Scrum",
+            "Technical Documentation", "Load Testing",
+        ],
+    },
+    "fullstack_developer": {
+        "label": "Fullstack Developer",
+        "search_queries": ["Fullstack Developer", "Full Stack Developer", "MERN Developer"],
+        "target_roles": [
+            "Fullstack Developer", "Full Stack Developer",
+            "MERN Stack Developer", "MEAN Stack Developer",
+        ],
+        "tools": [
+            "React", "Next.js", "TypeScript", "Node.js", "Python",
+            "PostgreSQL", "MongoDB", "Redis", "Docker", "AWS",
+            "Git", "GitHub", "Figma", "Postman", "VS Code",
+        ],
+        "skills": [
+            "REST API Design", "State Management", "Responsive Design",
+            "Database Design", "Authentication & Auth", "System Design",
+            "CI/CD Pipelines", "Code Review", "Agile/Scrum",
+            "Performance Optimization", "Security Best Practices",
+        ],
+    },
+    "product_manager": {
+        "label": "Product Manager",
+        "search_queries": ["Product Manager", "Product Owner", "Associate PM"],
+        "target_roles": [
+            "Product Manager", "Senior PM", "Associate PM",
+            "Product Owner", "Technical PM",
+        ],
+        "tools": [
+            "Jira", "Confluence", "Notion", "Figma", "Miro",
+            "Mixpanel", "Amplitude", "Google Analytics", "Tableau",
+            "Productboard", "Linear", "Asana", "Slack", "SQL",
+        ],
+        "skills": [
+            "Product Roadmapping", "Agile", "Scrum", "OKRs",
+            "User Research", "Customer Discovery", "A/B Testing",
+            "PRD Writing", "Stakeholder Management", "Data Analysis",
+            "Competitive Analysis", "Go-to-Market Strategy",
+            "Prioritization Frameworks", "Sprint Planning", "Growth",
+        ],
+    },
+    "data_scientist": {
+        "label": "Data Scientist / ML",
+        "search_queries": ["Data Scientist", "Machine Learning Engineer", "ML Engineer"],
+        "target_roles": [
+            "Data Scientist", "ML Engineer", "Machine Learning Engineer",
+            "AI Engineer", "Data Analyst", "Research Scientist",
+        ],
+        "tools": [
+            "Python", "R", "SQL", "Pandas", "NumPy", "Scikit-learn",
+            "TensorFlow", "PyTorch", "Keras", "XGBoost", "LightGBM",
+            "Jupyter", "Matplotlib", "Seaborn", "Tableau", "Power BI",
+            "Spark", "Airflow", "MLflow", "Docker", "AWS", "GCP",
+        ],
+        "skills": [
+            "Machine Learning", "Deep Learning", "NLP", "Computer Vision",
+            "Statistics", "A/B Testing", "Feature Engineering",
+            "Model Evaluation", "Data Wrangling", "EDA",
+            "Data Visualization", "Hypothesis Testing", "Time Series Analysis",
+            "Model Deployment", "Research & Experimentation",
+        ],
+    },
+}
+
+
+# ── Skill Expansion Maps ──────────────────────────────────────────────────────
+# When user mentions a skill, we know they also imply these related skills.
+# Used to surface hidden skills for ATS matching.
+
+SKILL_EXPANSION = {
+    # ── Design Tools ──
+    "figma": [
+        "Prototyping", "Wireframing", "Component Design", "Auto-layout",
+        "Design Tokens", "Dev Handoff", "Interactive Prototypes",
+        "Design Systems", "Collaborative Design",
+    ],
+    "adobe xd": [
+        "Prototyping", "Wireframing", "UI Design", "Responsive Design",
+    ],
+    "illustrator": [
+        "Vector Graphics", "Icon Design", "Brand Identity", "Typography",
+        "Print Design", "Logo Design",
+    ],
+    "photoshop": [
+        "Photo Editing", "Image Manipulation", "Visual Design",
+        "Digital Illustration", "Mockup Creation",
+    ],
+    "after effects": [
+        "Motion Design", "Animation", "Micro-interactions",
+        "Video Editing", "Motion Graphics",
+    ],
+
+    # ── UX Skills ──
+    "user research": [
+        "User Interviews", "Usability Testing", "Survey Design",
+        "Contextual Inquiry", "Diary Studies", "Research Synthesis",
+        "Affinity Mapping", "Persona Creation",
+    ],
+    "ux design": [
+        "User Research", "Information Architecture", "User Flows",
+        "Journey Mapping", "Wireframing", "Prototyping",
+        "Usability Testing", "User-Centered Design",
+    ],
+    "ui design": [
+        "Visual Hierarchy", "Typography", "Color Theory",
+        "Component Design", "Responsive Design", "Accessibility",
+        "Style Guides", "Design Systems",
+    ],
+    "design systems": [
+        "Component Libraries", "Design Tokens", "Style Guides",
+        "Pattern Libraries", "Atomic Design", "Documentation",
+    ],
+    "wireframing": [
+        "Low-fidelity Prototypes", "Information Architecture",
+        "User Flows", "Sketching", "Rapid Prototyping",
+    ],
+
+    # ── Frontend ──
+    "react": [
+        "React Hooks", "Component Architecture", "State Management",
+        "JSX", "React Router", "Context API", "Custom Hooks",
+    ],
+    "next.js": [
+        "SSR", "SSG", "ISR", "App Router", "API Routes",
+        "Server Components", "Edge Functions",
+    ],
+    "typescript": [
+        "Type Safety", "Interfaces", "Generics", "Type Guards",
+        "Strict Mode", "TSConfig",
+    ],
+    "javascript": [
+        "ES6+", "Async/Await", "Promises", "DOM Manipulation",
+        "Event Handling", "Closures", "Prototypal Inheritance",
+    ],
+    "css": [
+        "Flexbox", "CSS Grid", "Responsive Design", "CSS Animations",
+        "BEM", "CSS Variables", "Media Queries",
+    ],
+    "tailwind css": [
+        "Utility-first CSS", "Responsive Design", "Dark Mode",
+        "Custom Configuration", "Component Styling",
+    ],
+
+    # ── Backend ──
+    "python": [
+        "Object-Oriented Programming", "Scripting", "Automation",
+        "Data Processing", "REST APIs", "Async Programming",
+    ],
+    "node.js": [
+        "Event-driven Architecture", "NPM", "Express",
+        "Async Programming", "Streams", "REST APIs",
+    ],
+    "postgresql": [
+        "SQL", "Database Design", "Indexing", "Query Optimization",
+        "Transactions", "Stored Procedures",
+    ],
+    "docker": [
+        "Containerization", "Docker Compose", "Image Building",
+        "Container Orchestration", "Environment Management",
+    ],
+    "aws": [
+        "Cloud Computing", "S3", "EC2", "Lambda", "RDS",
+        "CloudFront", "IAM", "Serverless",
+    ],
+
+    # ── ML / Data ──
+    "machine learning": [
+        "Supervised Learning", "Unsupervised Learning", "Model Training",
+        "Feature Engineering", "Model Evaluation", "Cross-validation",
+        "Hyperparameter Tuning",
+    ],
+    "python (data)": [
+        "Pandas", "NumPy", "Scikit-learn", "Jupyter Notebooks",
+        "Data Wrangling", "EDA",
+    ],
+    "sql": [
+        "Database Queries", "Joins", "Aggregations", "Window Functions",
+        "Query Optimization", "Data Modeling",
+    ],
+}
+
+
+# ── Helper Functions ──────────────────────────────────────────────────────────
+
+def get_category(job_category: str) -> dict:
+    """Get category config. Falls back to ui_ux_designer."""
+    return JOB_CATEGORIES.get(job_category, JOB_CATEGORIES["ui_ux_designer"])
+
+
+def get_search_queries(job_category: str) -> list[str]:
+    """Get search queries for fetching jobs for this category."""
+    return get_category(job_category)["search_queries"]
+
+
+def expand_skills(
+    user_tools: list[str],
+    user_skills: list[str],
+    job_category: str,
+) -> dict:
+    """
+    Expand user's tools + skills with implied related items.
+    Returns separate expanded tools and skills lists.
+    """
+    # Expand tools
+    expanded_tools = list(user_tools)
+    seen_tools = {t.lower() for t in user_tools}
+    for tool in user_tools:
+        for implied in SKILL_EXPANSION.get(tool.lower(), []):
+            if implied.lower() not in seen_tools:
+                expanded_tools.append(implied)
+                seen_tools.add(implied.lower())
+
+    # Expand skills
+    expanded_skills = list(user_skills)
+    seen_skills = {s.lower() for s in user_skills}
+    for skill in user_skills:
+        for implied in SKILL_EXPANSION.get(skill.lower(), []):
+            if implied.lower() not in seen_skills:
+                expanded_skills.append(implied)
+                seen_skills.add(implied.lower())
+
+    return {
+        "expanded_tools": expanded_tools,
+        "expanded_skills": expanded_skills,
+        "all_expanded": expanded_tools + [s for s in expanded_skills if s.lower() not in seen_tools],
+    }
+
+
+def match_skills_to_job(
+    user_tools: list[str],
+    user_skills: list[str],
+    job_description: str,
+    job_category: str,
+) -> dict:
+    """
+    Compare expanded tools + skills against job description.
+    Returns matched, missing, and expanded lists.
+    """
+    expanded = expand_skills(user_tools, user_skills, job_category)
+    all_expanded = expanded["all_expanded"]
+    jd_lower = job_description.lower()
+
+    matched = [s for s in all_expanded if s.lower() in jd_lower]
+
+    cat = get_category(job_category)
+    all_cat_items = cat.get("tools", []) + cat.get("skills", [])
+    missing = [s for s in all_cat_items if s.lower() in jd_lower and s.lower() not in {x.lower() for x in all_expanded}]
+
+    score = round(len(matched) / max(len(all_expanded), 1) * 100)
+
+    return {
+        "matched_skills": matched,
+        "missing_skills": missing[:5],
+        "skill_match_score": score,
+        "expanded_tools": expanded["expanded_tools"],
+        "expanded_skills": expanded["expanded_skills"],
+        "all_expanded": all_expanded,
+    }

@@ -1,0 +1,65 @@
+version: "3.9"
+
+services:
+  # ────────────────────────────────────────────
+  # PostgreSQL — Local development database
+  # ────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ai_copilot_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ai_career_copilot
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../database/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ────────────────────────────────────────────
+  # Redis — Task queue and caching
+  # ────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: ai_copilot_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ────────────────────────────────────────────
+  # RQ Worker — Background task processor
+  # (enable after backend is set up)
+  # ────────────────────────────────────────────
+  # rq_worker:
+  #   build:
+  #     context: ../backend
+  #     dockerfile: ../docker/Dockerfile.backend
+  #   container_name: ai_copilot_worker
+  #   command: python -m rq worker --with-scheduler
+  #   environment:
+  #     - REDIS_URL=redis://redis:6379
+  #     - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/ai_career_copilot
+  #   depends_on:
+  #     - postgres
+  #     - redis
+  #   volumes:
+  #     - ../backend:/app
+  #     - /app/venv
+
+volumes:
+  postgres_data:
+  redis_data:

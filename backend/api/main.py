@@ -39,15 +39,27 @@ app = FastAPI(
 )
 
 # ── CORS ─────────────────────────────────────────────────────────────────────
+# Vercel gives every deployment (production + every branch preview) its own
+# unique *.vercel.app subdomain under the team's namespace. Requiring an
+# exact FRONTEND_URL match means CORS breaks every time a different preview
+# URL is used. Allow anything under this specific Vercel team's subdomain
+# (not *.vercel.app broadly — that's a shared multi-tenant domain and would
+# let any other developer's Vercel-hosted app make credentialed requests
+# here too). FRONTEND_URL still works as an extra explicit origin, e.g. for
+# a custom domain later, or if your production URL doesn't match this regex.
+VERCEL_TEAM_ORIGIN_REGEX = r"^https://.*gargeypatel123-2282s-projects\.vercel\.app$"
+
 allowed_origins = (
     ["*"]
     if settings.is_development
     else [origin for origin in [settings.frontend_url] if origin]
 )
+allow_origin_regex = None if settings.is_development else VERCEL_TEAM_ORIGIN_REGEX
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

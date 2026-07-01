@@ -41,10 +41,7 @@ app = FastAPI(
 allowed_origins = (
     ["*"]
     if settings.is_development
-    else [
-        "https://your-app.vercel.app",   # Replace with your Vercel URL in prod
-        "https://ai-career-copilot.com",
-    ]
+    else [origin for origin in [settings.frontend_url] if origin]
 )
 
 app.add_middleware(

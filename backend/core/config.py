@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     # App
     app_env: str = "development"
     app_secret_key: str = "change-me-in-production"
+    frontend_url: str = ""
     founder_email: str = "gargeypatel123@gmail.com"
     digest_time: str = "07:00"
     max_jobs_per_user: int = 10

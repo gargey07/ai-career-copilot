@@ -66,6 +66,20 @@ npm run dev
 
 ---
 
+## Deploy (Free Tier)
+
+### Backend → Render
+1. Push this repo to GitHub, then in Render click **New → Blueprint** and point it at the repo — it reads `render.yaml` at the repo root automatically.
+2. In the service's **Environment** tab, fill in the vars marked `sync: false` (Supabase keys, AI provider keys, etc. — see `backend/.env.example`). `FRONTEND_URL` should be your Vercel URL once you have it (step below).
+3. Render gives you a URL like `https://ai-career-copilot-api.onrender.com`. Free tier sleeps after 15 min idle — the first request after that takes ~30-60s to wake up.
+
+### Frontend → Vercel
+1. Import the repo in Vercel and set **Root Directory** to `frontend` (Project Settings → General — required since this is a monorepo).
+2. Add env vars from `frontend/.env.local.example`, setting `NEXT_PUBLIC_API_URL` to your Render URL from above.
+3. Deploy. Once you have the Vercel URL, set it as `FRONTEND_URL` on the Render backend so CORS allows requests from it.
+
+---
+
 ## Documentation
 - [Product Requirements](docs/PRD.md)
 - [Technical Architecture](docs/TECH.md)

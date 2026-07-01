@@ -4,8 +4,10 @@ AI Career Copilot — FastAPI Application Entry Point
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from core.config import get_settings
 from api.routes import resumes, suggestions
@@ -61,6 +63,27 @@ allowed_origins = (
     else list({KNOWN_PRODUCTION_ORIGIN, *[o for o in [settings.frontend_url] if o]})
 )
 allow_origin_regex = None if settings.is_development else VERCEL_TEAM_ORIGIN_REGEX
+
+
+# ── Global Error Handler ─────────────────────────────────────────────────────
+# A plain @app.exception_handler(Exception) gets special-cased by Starlette:
+# it's pulled out into ServerErrorMiddleware, which sits OUTSIDE
+# CORSMiddleware in the stack, so its responses never get CORS headers —
+# the browser can't read them and shows a generic network failure with zero
+# detail instead of the real error. Using an actual middleware instead, and
+# registering it BEFORE CORSMiddleware below (Starlette builds the stack in
+# reverse-add order, so this ends up INSIDE CORSMiddleware), keeps the error
+# response flowing back through CORS header injection correctly.
+class CatchExceptionsMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        try:
+            return await call_next(request)
+        except Exception as exc:
+            logger.error(f"Unhandled exception on {request.method} {request.url.path}: {exc}", exc_info=True)
+            return JSONResponse(status_code=500, content={"detail": f"Internal server error: {exc}"})
+
+
+app.add_middleware(CatchExceptionsMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

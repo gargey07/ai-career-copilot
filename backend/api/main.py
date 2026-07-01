@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from core.config import get_settings
+from api.routes import resumes, suggestions
 
 # ── Logger Setup ─────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -69,10 +70,12 @@ async def health():
     return {"status": "healthy"}
 
 
+app.include_router(resumes.router,     prefix="/api/resumes",     tags=["Resumes"])
+app.include_router(suggestions.router, prefix="/api/suggestions", tags=["Suggestions"])
+
 # ── Future routers (uncomment as you build each phase) ───────────────────────
-# from api.routes import auth, users, jobs, resumes, admin
+# from api.routes import auth, users, jobs, admin
 # app.include_router(auth.router,    prefix="/api/auth",    tags=["Auth"])
 # app.include_router(users.router,   prefix="/api/users",   tags=["Users"])
 # app.include_router(jobs.router,    prefix="/api/jobs",    tags=["Jobs"])
-# app.include_router(resumes.router, prefix="/api/resumes", tags=["Resumes"])
 # app.include_router(admin.router,   prefix="/api/admin",   tags=["Admin"])

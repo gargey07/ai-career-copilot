@@ -272,6 +272,51 @@ def get_search_queries(job_category: str) -> list[str]:
     return get_category(job_category)["search_queries"]
 
 
+def all_categories() -> list[dict]:
+    """[{value, label}, ...] for every job category — powers the tile grid + 'Other' search fallback."""
+    return [{"value": key, "label": cat["label"]} for key, cat in JOB_CATEGORIES.items()]
+
+
+def _flatten(field: str) -> list[str]:
+    """Deduped, order-preserving flat list of a field across every job category."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for cat in JOB_CATEGORIES.values():
+        for item in cat.get(field, []):
+            if item.lower() not in seen:
+                seen.add(item.lower())
+                out.append(item)
+    return out
+
+
+# Computed once at import time — static data, cheap to flatten.
+ALL_ROLES  = _flatten("target_roles")
+ALL_TOOLS  = _flatten("tools")
+ALL_SKILLS = _flatten("skills")
+
+_SUGGESTION_SOURCES = {"roles": ALL_ROLES, "tools": ALL_TOOLS, "skills": ALL_SKILLS}
+
+
+def suggest(field: str, query: str, limit: int = 20) -> list[str]:
+    """
+    Type-ahead suggestions for roles/tools/skills across every job family,
+    not just one category — backs the search-select fields in onboarding.
+    Prefix matches rank above substring matches; no query returns the
+    (already curated) full list up to `limit`.
+    """
+    source = _SUGGESTION_SOURCES.get(field)
+    if source is None:
+        raise ValueError(f"Unknown suggestion field: '{field}' (expected roles/tools/skills)")
+
+    q = query.strip().lower()
+    if not q:
+        return source[:limit]
+
+    prefix_matches = [item for item in source if item.lower().startswith(q)]
+    substring_matches = [item for item in source if q in item.lower() and item not in prefix_matches]
+    return (prefix_matches + substring_matches)[:limit]
+
+
 def expand_skills(
     user_tools: list[str],
     user_skills: list[str],

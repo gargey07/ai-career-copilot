@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     gemini_embed_daily_limit: int = 500
     openai_daily_limit: int = 50           # spend safety valve — OpenAI has no free quota
     resend_daily_limit: int = 100          # Resend free tier
+    resume_parse_daily_limit_per_ip: int = 10  # abuse/cost guard on re-uploads; keyed by client IP (no auth yet)
 
     @property
     def is_production(self) -> bool:

@@ -17,8 +17,16 @@ CREATE TABLE IF NOT EXISTS users (
   avatar_url          TEXT,
   google_id           TEXT UNIQUE,
 
+  -- Contact / basic info
+  phone               TEXT,
+  location            TEXT,                        -- user's own current location (free text)
+
   -- Job preferences
+  job_category        TEXT,                        -- e.g. 'ui_ux_designer', 'backend_developer', or free text via search
   target_roles        TEXT[] DEFAULT '{}',        -- e.g. ['UI/UX Designer', 'Product Designer']
+  tools                TEXT[] DEFAULT '{}',         -- e.g. ['Figma', 'React']
+  skills               TEXT[] DEFAULT '{}',         -- e.g. ['Prototyping', 'REST API Design']
+  work_type            TEXT[] DEFAULT '{}',         -- e.g. ['Remote', 'Hybrid']
   experience_level    TEXT DEFAULT 'mid',          -- 'entry', 'mid', 'senior', 'lead'
   preferred_locations TEXT[] DEFAULT '{}',         -- e.g. ['Mumbai', 'Remote', 'Bangalore']
   salary_min          INTEGER,                     -- in INR/month or USD/year
@@ -26,8 +34,14 @@ CREATE TABLE IF NOT EXISTS users (
   remote_preference   TEXT DEFAULT 'any',          -- 'remote', 'hybrid', 'onsite', 'any'
 
   -- Resume data
-  resume_text         TEXT,                        -- raw resume content (pasted or parsed from PDF)
+  summary              TEXT,                        -- short professional summary
+  work_experience       JSONB DEFAULT '[]'::jsonb,   -- [{title, company, start_date, end_date, is_current, bullets:[]}]
+  education             JSONB DEFAULT '[]'::jsonb,   -- [{school, degree, field_of_study, start_date, end_date}]
+  resume_text         TEXT,                        -- flattened plain-text resume — kept in sync from structured
+                                                     -- data on save so matcher.py / optimizer.py need no changes
   resume_embedding    vector(768),                 -- for matching
+  resume_file_path    TEXT,                        -- path in the private "resume-uploads" Storage bucket (not a public URL)
+  confidence_flags     JSONB DEFAULT '{}'::jsonb,    -- e.g. {"phone": "missing", "summary": "low_confidence"}
 
   -- Profile links
   linkedin_url        TEXT,
@@ -179,6 +193,36 @@ CREATE TABLE IF NOT EXISTS api_usage (
 );
 
 -- ============================================================
+-- RESUME_PARSE_JOBS TABLE
+-- Background job status for resume upload -> AI extraction.
+-- No user_id: uploads happen during onboarding, before a users row
+-- exists. The frontend polls status via the backend API only —
+-- never queried directly with the anon key.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS resume_parse_jobs (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  status        TEXT NOT NULL DEFAULT 'pending',  -- 'pending', 'processing', 'done', 'failed'
+  source        TEXT NOT NULL,                    -- 'file' | 'url'
+  file_path     TEXT,                             -- path in the private "resume-uploads" Storage bucket
+  result        JSONB,                            -- parsed structured data once status = 'done'
+  error_message TEXT,
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================
+-- STORAGE BUCKETS (created via Supabase Storage API in code, not SQL —
+-- see backend/core/resume_parser.py, same pattern as
+-- upload_to_supabase_storage() in backend/core/pdf_generator.py)
+--
+--   "resumes"        — existing, PUBLIC. AI-tailored generated PDFs
+--                       (linked from digest emails).
+--   "resume-uploads"  — NEW, PRIVATE. Raw user-uploaded resume files.
+--                       Contains PII — only the backend's service_role
+--                       key may read/write it, never a public URL.
+-- ============================================================
+
+-- ============================================================
 -- ROW LEVEL SECURITY (RLS)
 -- Each user can only access their own data
 -- ============================================================
@@ -187,8 +231,10 @@ ALTER TABLE user_jobs     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE email_logs    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pipeline_status ENABLE ROW LEVEL SECURITY;
 ALTER TABLE api_usage     ENABLE ROW LEVEL SECURITY;
--- No policies defined for api_usage — only the backend's service_role
--- key (which bypasses RLS) should ever read or write it.
+ALTER TABLE resume_parse_jobs ENABLE ROW LEVEL SECURITY;
+-- No policies defined for api_usage or resume_parse_jobs — only the
+-- backend's service_role key (which bypasses RLS) should ever read or
+-- write them.
 
 -- Users can only read/update their own profile
 CREATE POLICY "users_own_profile" ON users
@@ -229,3 +275,24 @@ CREATE TRIGGER users_updated_at
 CREATE TRIGGER user_jobs_updated_at
   BEFORE UPDATE ON user_jobs
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE TRIGGER resume_parse_jobs_updated_at
+  BEFORE UPDATE ON resume_parse_jobs
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================
+-- MIGRATION — run this block if your `users` table already exists
+-- (i.e. you ran an earlier version of this schema). CREATE TABLE IF
+-- NOT EXISTS above won't retroactively add these columns.
+-- ============================================================
+ALTER TABLE users ADD COLUMN IF NOT EXISTS phone               TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS location             TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS job_category        TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS tools                TEXT[] DEFAULT '{}';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS skills               TEXT[] DEFAULT '{}';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS work_type            TEXT[] DEFAULT '{}';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS summary              TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS work_experience      JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS education            JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS resume_file_path    TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS confidence_flags     JSONB DEFAULT '{}'::jsonb;

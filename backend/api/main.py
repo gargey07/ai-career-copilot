@@ -49,10 +49,16 @@ app = FastAPI(
 # a custom domain later, or if your production URL doesn't match this regex.
 VERCEL_TEAM_ORIGIN_REGEX = r"^https://.*gargeypatel123-2282s-projects\.vercel\.app$"
 
+# Confirmed production domain — doesn't match the regex above since Vercel's
+# stable production URL for this project doesn't include the team slug.
+# Hardcoded rather than relying solely on the FRONTEND_URL env var being
+# entered correctly, so a typo in Render's dashboard can't break this again.
+KNOWN_PRODUCTION_ORIGIN = "https://ai-career-copilot-taupe-five.vercel.app"
+
 allowed_origins = (
     ["*"]
     if settings.is_development
-    else [origin for origin in [settings.frontend_url] if origin]
+    else list({KNOWN_PRODUCTION_ORIGIN, *[o for o in [settings.frontend_url] if o]})
 )
 allow_origin_regex = None if settings.is_development else VERCEL_TEAM_ORIGIN_REGEX
 

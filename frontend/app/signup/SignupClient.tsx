@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseConfigured } from "@/lib/supabase";
 
 // ── Job Categories ────────────────────────────────────────────────────────────
 const JOB_CATEGORIES = [
@@ -96,6 +96,7 @@ export default function SignupClient() {
     if (form.target_roles.length === 0)  { setError("Select at least one target role."); return; }
     if (form.tools.length === 0)         { setError("Select at least one tool you use."); return; }
     if (form.skills.length === 0)        { setError("Select at least one skill you have."); return; }
+    if (!supabaseConfigured)             { setError("App isn't configured correctly (Supabase connection missing). Please contact support."); return; }
 
     setLoading(true);
     setError("");

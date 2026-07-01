@@ -2,7 +2,7 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseConfigured } from "@/lib/supabase";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface Job {
@@ -141,6 +141,7 @@ function DashboardContent() {
 
   useEffect(() => {
     if (!userId) { setError("No user ID in URL. Check your link."); setLoading(false); return; }
+    if (!supabaseConfigured) { setError("App isn't configured correctly (Supabase connection missing). Please contact support."); setLoading(false); return; }
 
     async function load() {
       try {

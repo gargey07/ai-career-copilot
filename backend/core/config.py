@@ -3,11 +3,24 @@ AI Career Copilot — Application Settings
 Loaded from .env file using pydantic-settings
 """
 from functools import lru_cache
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # Dashboard copy-paste repeatedly wrapped values in angle brackets or
+    # left stray whitespace/quotes (e.g. "<https://x.supabase.co>"), which
+    # produces "Invalid URL" errors deep in the Supabase/httpx client.
+    # Strip that junk off every string setting up front so a fat-fingered
+    # env var can't silently break the whole backend.
+    @field_validator("*", mode="before")
+    @classmethod
+    def _strip_wrapping_chars(cls, v):
+        if isinstance(v, str):
+            return v.strip().strip("<>").strip().strip('"').strip("'").strip()
+        return v
 
     # App
     app_env: str = "development"

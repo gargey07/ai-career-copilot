@@ -19,11 +19,20 @@ def get_supabase() -> Client:
     global _client
     if _client is None:
         settings = get_settings()
-        if not settings.supabase_url or not settings.supabase_service_key:
+        url = settings.supabase_url
+        if not url or not settings.supabase_service_key:
             raise ValueError(
-                "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in .env"
+                "SUPABASE_URL and SUPABASE_SERVICE_KEY must both be set as environment variables."
             )
-        _client = create_client(settings.supabase_url, settings.supabase_service_key)
+        # Catch the common wrong value: the dashboard page URL instead of the
+        # project API URL. The API URL is https://<project-ref>.supabase.co —
+        # NOT https://supabase.com/dashboard/project/<ref>.
+        if "supabase.com/dashboard" in url or not url.rstrip("/").endswith(".supabase.co"):
+            raise ValueError(
+                f"SUPABASE_URL looks wrong ({url!r}). It must be your project API URL, "
+                "which looks like https://<project-ref>.supabase.co — not the dashboard page URL."
+            )
+        _client = create_client(url, settings.supabase_service_key)
     return _client
 
 

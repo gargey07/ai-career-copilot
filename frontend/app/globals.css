@@ -4,12 +4,33 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Design tokens — see docs/design-system.md (source of truth) ─────────────── */
 :root {
-  --bg: #060614;
-  --surface: rgba(255,255,255,0.04);
-  --border: rgba(255,255,255,0.08);
-  --blue: #3b82f6;
-  --purple: #8b5cf6;
+  /* Colors (light theme) */
+  --bg: #F8FAFC;
+  --surface: #FFFFFF;
+  --surface-muted: #F1F5F9;
+  --border: #E5E7EB;
+  --text: #0F2F3A;
+  --text-muted: #64748B;
+  --primary: #F59E0B;
+  --primary-hover: #D97706;
+  --accent: #F97316;
+  --coral: #EF4444;
+  --danger: #EF4444;
+  --success: #0F9D8C;
+  --warning: #F59E0B;
+
+  /* Radius */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  /* Elevation (soft, teal-tinted) */
+  --shadow-e1: 0 1px 3px rgba(15,47,58,.06);
+  --shadow-e2: 0 4px 12px rgba(15,47,58,.08);
+  --shadow-e3: 0 12px 32px rgba(15,47,58,.12);
 }
 
 * { box-sizing: border-box; }
@@ -18,20 +39,24 @@ html { scroll-behavior: smooth; }
 
 body {
   background: var(--bg);
-  color: white;
+  color: var(--text);
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
 /* ── Utilities ─────────────────────────────────────────── */
-.glass {
+/* .glass is retained as the standard white card so existing markup keeps working,
+   but on the light theme it's a solid surface with a soft shadow — no dark blur. */
+.glass,
+.card {
   background: var(--surface);
   border: 1px solid var(--border);
-  backdrop-filter: blur(12px);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-e1);
 }
 
 .text-gradient {
-  background: linear-gradient(135deg, #60a5fa, #a78bfa);
+  background: linear-gradient(135deg, var(--primary), var(--coral));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -50,28 +75,46 @@ body {
   0%, 100% { transform: translateY(0); }
   50%       { transform: translateY(-10px); }
 }
-@keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 20px rgba(59,130,246,0.3); }
-  50%       { box-shadow: 0 0 40px rgba(59,130,246,0.6); }
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
 }
 
 .animate-fade-in  { animation: fade-in  0.7s ease both; }
 .animate-slide-up { animation: slide-up 0.5s ease both; }
 .animate-float    { animation: float    3s ease-in-out infinite; }
-.animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
 
-/* ── Score badges ──────────────────────────────────────── */
-.badge-green  { background:#16a34a22; color:#4ade80; border:1px solid #16a34a44; }
-.badge-yellow { background:#ca8a0422; color:#fbbf24; border:1px solid #ca8a0444; }
-.badge-orange { background:#ea580c22; color:#fb923c; border:1px solid #ea580c44; }
+/* ── Skeleton (loading state — used instead of spinners) ── */
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-muted) 25%, #E9EEF3 37%, var(--surface-muted) 63%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: var(--radius-md);
+}
+
+/* ── Score badges (recolored to brand) ─────────────────── */
+.badge-green  { background:#0F9D8C1a; color:#0F9D8C; border:1px solid #0F9D8C33; }
+.badge-yellow { background:#F59E0B1a; color:#B45309; border:1px solid #F59E0B33; }
+.badge-orange { background:#F973161a; color:#C2410C; border:1px solid #F9731633; }
 
 /* ── Input focus ───────────────────────────────────────── */
 input:focus, textarea:focus, select:focus {
   outline: none;
-  ring: 2px solid var(--blue);
+  box-shadow: 0 0 0 2px var(--primary);
+  border-color: var(--primary);
+}
+
+/* ── Reduced motion ────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* ── Scrollbar ─────────────────────────────────────────── */
-::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 4px; }

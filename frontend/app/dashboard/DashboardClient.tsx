@@ -2,7 +2,25 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import {
+  Sun,
+  Briefcase,
+  Target,
+  FileText,
+  Send,
+  CalendarCheck,
+  Award,
+  Download,
+  ExternalLink,
+  AlertTriangle,
+  Clock,
+  type LucideIcon,
+} from "lucide-react";
 import { supabase, supabaseConfigured } from "@/lib/supabase";
+import { BrandMark } from "@/components/BrandMark";
+import { Card } from "@/components/ui/Card";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface Job {
@@ -28,39 +46,46 @@ interface User {
   target_roles: string[];
 }
 
-// ── Score badge helper ─────────────────────────────────────────────────────────
+// ── Score badge (CSS dot, no emoji) ─────────────────────────────────────────────
 function ScoreBadge({ score }: { score: number }) {
   const pct = Math.round(score * 100);
-  const cls =
-    pct >= 85 ? "badge-green" :
-    pct >= 70 ? "badge-yellow" :
-    "badge-orange";
-  const emoji = pct >= 85 ? "🟢" : pct >= 70 ? "🟡" : "🟠";
+  const cls = pct >= 85 ? "badge-green" : pct >= 70 ? "badge-yellow" : "badge-orange";
+  const dot = pct >= 85 ? "#0F9D8C" : pct >= 70 ? "#F59E0B" : "#F97316";
   return (
-    <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold ${cls}`}>
-      {emoji} {pct}% Match
+    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${cls}`}>
+      <span className="w-1.5 h-1.5 rounded-full" style={{ background: dot }} />
+      {pct}% Match
     </span>
   );
 }
 
-// ── Job Card ───────────────────────────────────────────────────────────────────
+// ── Stat card ────────────────────────────────────────────────────────────────────
+function StatCard({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string | number }) {
+  return (
+    <Card className="p-5">
+      <div className="flex items-center gap-2 mb-2">
+        <Icon size={18} strokeWidth={1.75} style={{ color: "var(--primary)" }} />
+        <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>{label}</span>
+      </div>
+      <div className="text-2xl font-extrabold" style={{ color: "var(--text)" }}>{value}</div>
+    </Card>
+  );
+}
+
+// ── Job card ─────────────────────────────────────────────────────────────────────
 function JobCard({ match, index }: { match: UserJob; index: number }) {
   const job = match.jobs;
-
+  const hasApply = job.source_url && !job.source_url.includes("example.com");
   return (
-    <div
-      className="glass rounded-2xl p-6 space-y-4 hover:bg-white/[0.07] transition-all duration-200 animate-fade-in"
-      style={{ animationDelay: `${index * 80}ms` }}
-    >
-      {/* Header */}
+    <Card className="p-6 space-y-4 animate-fade-in transition hover:shadow-e2" style={{ animationDelay: `${index * 60}ms` }}>
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h3 className="text-lg font-bold text-white">{job.title}</h3>
-          <p className="text-gray-400 text-sm mt-0.5">
+          <h3 className="text-lg font-bold" style={{ color: "var(--text)" }}>{job.title}</h3>
+          <p className="text-sm mt-0.5" style={{ color: "var(--text-muted)" }}>
             {job.company}
             {job.location && ` · ${job.location}`}
             {job.is_remote && (
-              <span className="ml-2 px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 text-xs border border-blue-500/20">
+              <span className="ml-2 px-2 py-0.5 rounded-full text-xs" style={{ background: "#FEF3C7", color: "#B45309", border: "1px solid #FDE68A" }}>
                 Remote
               </span>
             )}
@@ -69,60 +94,60 @@ function JobCard({ match, index }: { match: UserJob; index: number }) {
         <ScoreBadge score={match.match_score} />
       </div>
 
-      {/* Buttons */}
       <div className="flex flex-wrap gap-3">
         {match.pdf_url ? (
           <a
             href={match.pdf_url}
             target="_blank"
             rel="noopener noreferrer"
-            id={`job-resume-${match.id}`}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-sm font-semibold text-white transition-all"
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-semibold text-white transition hover:opacity-90"
+            style={{ background: "var(--primary)" }}
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
+            <Download size={16} strokeWidth={1.75} />
             View Tailored Resume
           </a>
         ) : (
-          <span className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-sm text-gray-500">
-            📄 Resume generating...
+          <span className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm" style={{ background: "var(--surface-muted)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
+            <Clock size={16} strokeWidth={1.75} />
+            Resume generating…
           </span>
         )}
 
-        {job.source_url && !job.source_url.includes("example.com") ? (
+        {hasApply ? (
           <a
             href={job.source_url}
             target="_blank"
             rel="noopener noreferrer"
-            id={`job-apply-${match.id}`}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-white/15 hover:border-white/30 hover:bg-white/5 text-sm font-semibold text-white transition-all"
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-semibold transition hover:bg-[var(--surface-muted)]"
+            style={{ border: "1px solid var(--border)", color: "var(--text)" }}
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-            </svg>
+            <ExternalLink size={16} strokeWidth={1.75} />
             Apply Now
           </a>
         ) : (
-          <span className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-white/5 text-sm text-gray-600">
+          <span className="inline-flex items-center px-4 py-2.5 rounded-md text-sm" style={{ border: "1px solid var(--border)", color: "var(--text-muted)" }}>
             Apply link coming soon
           </span>
         )}
       </div>
-    </div>
+    </Card>
   );
 }
 
-// ── Empty State ────────────────────────────────────────────────────────────────
-function EmptyState() {
+// ── Loading skeleton ─────────────────────────────────────────────────────────────
+function DashboardSkeleton() {
   return (
-    <div className="text-center py-24 animate-fade-in">
-      <div className="text-6xl mb-6 animate-float inline-block">⏳</div>
-      <h2 className="text-2xl font-bold text-white mb-3">No jobs yet today</h2>
-      <p className="text-gray-400 max-w-md mx-auto">
-        The pipeline runs nightly at 2 AM. Your first digest will arrive tomorrow morning at 7 AM.
-        Check back then!
-      </p>
+    <div className="max-w-4xl mx-auto px-6 py-10 space-y-8">
+      <div className="space-y-3">
+        <Skeleton className="h-4 w-48" />
+        <Skeleton className="h-10 w-72" />
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+        {[0, 1, 2].map((i) => <Skeleton key={i} className="h-24 w-full" />)}
+      </div>
+      <div className="space-y-4">
+        {[0, 1].map((i) => <Skeleton key={i} className="h-36 w-full" />)}
+      </div>
     </div>
   );
 }
@@ -132,10 +157,10 @@ function DashboardContent() {
   const params = useSearchParams();
   const userId = params.get("user_id");
 
-  const [user, setUser]       = useState<User | null>(null);
-  const [matches, setMatches] = useState<UserJob[]>([]);
+  const [user, setUser] = useState<User | null>(null);
+  const [allJobs, setAllJobs] = useState<UserJob[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState("");
+  const [error, setError] = useState("");
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -145,7 +170,6 @@ function DashboardContent() {
 
     async function load() {
       try {
-        // Fetch user
         const { data: userData, error: userErr } = await supabase
           .from("users")
           .select("id, name, email, target_roles")
@@ -154,15 +178,13 @@ function DashboardContent() {
         if (userErr) throw userErr;
         setUser(userData);
 
-        // Fetch today's job matches
-        const { data: matchData, error: matchErr } = await supabase
+        const { data: jobData, error: jobErr } = await supabase
           .from("user_jobs")
           .select("id, match_score, pdf_url, digest_date, status, jobs(id, title, company, location, is_remote, source_url)")
           .eq("user_id", userId)
-          .eq("digest_date", today)
           .order("match_score", { ascending: false });
-        if (matchErr) throw matchErr;
-        setMatches((matchData as any) || []);
+        if (jobErr) throw jobErr;
+        setAllJobs((jobData as any) || []);
       } catch (e: any) {
         setError(e.message || "Failed to load dashboard.");
       } finally {
@@ -174,111 +196,130 @@ function DashboardContent() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center space-y-4 animate-pulse">
-          <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 mx-auto animate-spin" />
-          <p className="text-gray-400">Loading your matches...</p>
-        </div>
-      </div>
+      <main className="min-h-screen" style={{ background: "var(--bg)" }}>
+        <DashboardSkeleton />
+      </main>
     );
   }
 
   if (error || !user) {
     return (
-      <div className="min-h-screen flex items-center justify-center px-6">
-        <div className="glass rounded-2xl p-8 text-center max-w-md">
-          <div className="text-4xl mb-4">⚠️</div>
-          <h2 className="text-xl font-bold text-white mb-2">Dashboard Error</h2>
-          <p className="text-gray-400 text-sm">{error || "Invalid user ID. Check your link."}</p>
-        </div>
-      </div>
+      <main className="min-h-screen flex items-center justify-center px-6" style={{ background: "var(--bg)" }}>
+        <Card className="p-8 text-center max-w-md">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full" style={{ background: "#FEF2F2" }}>
+            <AlertTriangle size={24} strokeWidth={1.75} style={{ color: "var(--coral)" }} />
+          </div>
+          <h2 className="text-xl font-bold mb-2" style={{ color: "var(--text)" }}>Couldn&apos;t load your dashboard</h2>
+          <p className="text-sm" style={{ color: "var(--text-muted)" }}>{error || "Invalid user ID. Check your link."}</p>
+        </Card>
+      </main>
     );
   }
 
-  const firstName = user.name.split(" ")[0];
+  const firstName = user.name?.split(" ")[0] || "there";
+  const todayMatches = allJobs.filter((j) => j.digest_date === today);
+  const jobsFound = todayMatches.length;
+  const resumesReady = todayMatches.filter((m) => m.pdf_url).length;
+  const bestMatch = todayMatches.length ? Math.round(Math.max(...todayMatches.map((m) => m.match_score)) * 100) : 0;
+  const applications = allJobs.filter((j) => j.status === "applied").length;
+  const interviews = allJobs.filter((j) => j.status === "interviewing").length;
+  const offers = allJobs.filter((j) => j.status === "offered").length;
 
   return (
-    <main className="min-h-screen">
-      {/* Background */}
-      <div className="fixed inset-0 -z-10 pointer-events-none">
-        <div className="absolute top-0 left-0 w-[600px] h-[400px] rounded-full bg-blue-600/10 blur-[100px]" />
-        <div className="absolute bottom-0 right-0 w-[500px] h-[400px] rounded-full bg-purple-600/10 blur-[100px]" />
-      </div>
-
-      {/* Nav */}
-      <nav className="border-b border-white/5 px-6 py-4">
+    <main className="min-h-screen" style={{ background: "var(--bg)", color: "var(--text)" }}>
+      <nav className="px-6 py-4" style={{ borderBottom: "1px solid var(--border)" }}>
         <div className="max-w-4xl mx-auto flex items-center justify-between">
-          <a href="/" className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-sm font-bold">
-              AI
-            </div>
-            <span className="font-semibold text-white">Career Copilot</span>
-          </a>
+          <BrandMark />
           <div className="text-right">
-            <div className="text-sm font-medium text-white">{user.name}</div>
-            <div className="text-xs text-gray-500">{user.email}</div>
+            <div className="text-sm font-medium" style={{ color: "var(--text)" }}>{user.name}</div>
+            <div className="text-xs" style={{ color: "var(--text-muted)" }}>{user.email}</div>
           </div>
         </div>
       </nav>
 
       <div className="max-w-4xl mx-auto px-6 py-10">
-        {/* Header */}
-        <div className="mb-10 animate-fade-in">
+        {/* Greeting */}
+        <div className="mb-8 animate-fade-in">
           <div className="flex items-center gap-2 mb-2">
-            <span className="text-2xl">☀️</span>
-            <span className="text-sm text-blue-300 font-medium">
-              Morning Digest — {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}
+            <Sun size={18} strokeWidth={1.75} style={{ color: "var(--primary)" }} />
+            <span className="text-sm font-medium" style={{ color: "var(--text-muted)" }}>
+              {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}
             </span>
           </div>
-          <h1 className="text-4xl font-extrabold text-white">
-            Good morning, <span className="text-gradient">{firstName}!</span>
+          <h1 className="text-3xl sm:text-4xl font-extrabold" style={{ color: "var(--text)" }}>
+            Good morning, <span className="text-gradient">{firstName}</span>
           </h1>
-          <p className="text-gray-400 mt-2">
-            {matches.length > 0
-              ? `We found ${matches.length} job${matches.length > 1 ? "s" : ""} for you today. Your AI has already tailored your resume for each one.`
-              : "Your pipeline hasn't run yet today. Check back after 7 AM."}
+          <p className="mt-2" style={{ color: "var(--text-muted)" }}>
+            {jobsFound > 0
+              ? `We found ${jobsFound} job${jobsFound > 1 ? "s" : ""} for you today. Your AI has tailored a resume for each.`
+              : "Your first matches are on the way — the pipeline runs nightly."}
           </p>
         </div>
 
-        {/* Stats row */}
-        {matches.length > 0 && (
-          <div className="grid grid-cols-3 gap-4 mb-10 animate-fade-in">
+        {/* Stat cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6 animate-fade-in">
+          <StatCard icon={Briefcase} label="Jobs Found" value={jobsFound} />
+          <StatCard icon={FileText} label="Resumes Ready" value={resumesReady} />
+          <StatCard icon={Target} label="Best Match" value={`${bestMatch}%`} />
+        </div>
+
+        {/* Progress */}
+        <Card className="p-5 mb-10 animate-fade-in">
+          <div className="text-xs font-semibold uppercase tracking-wide mb-4" style={{ color: "var(--text-muted)" }}>
+            Your progress
+          </div>
+          <div className="grid grid-cols-3 gap-4">
             {[
-              { label: "Jobs Today",       value: matches.length },
-              { label: "Best Match",       value: `${Math.round(Math.max(...matches.map(m => m.match_score)) * 100)}%` },
-              { label: "Resumes Ready",    value: matches.filter(m => m.pdf_url).length },
-            ].map((stat) => (
-              <div key={stat.label} className="glass rounded-xl p-4 text-center">
-                <div className="text-2xl font-extrabold text-white">{stat.value}</div>
-                <div className="text-xs text-gray-500 mt-1">{stat.label}</div>
+              { icon: Send, label: "Applications", value: applications },
+              { icon: CalendarCheck, label: "Interviews", value: interviews },
+              { icon: Award, label: "Offers", value: offers },
+            ].map((p) => (
+              <div key={p.label} className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-md shrink-0" style={{ background: "var(--surface-muted)" }}>
+                  <p.icon size={18} strokeWidth={1.75} style={{ color: "var(--text-muted)" }} />
+                </div>
+                <div>
+                  <div className="text-xl font-extrabold" style={{ color: "var(--text)" }}>{p.value}</div>
+                  <div className="text-xs" style={{ color: "var(--text-muted)" }}>{p.label}</div>
+                </div>
               </div>
             ))}
           </div>
-        )}
+        </Card>
 
-        {/* Job Cards */}
-        {matches.length > 0 ? (
+        {/* Today's jobs */}
+        <h2 className="text-lg font-semibold mb-4" style={{ color: "var(--text)" }}>Today&apos;s matches</h2>
+        {todayMatches.length > 0 ? (
           <div className="space-y-4">
-            {matches.map((m, i) => <JobCard key={m.id} match={m} index={i} />)}
+            {todayMatches.map((m, i) => <JobCard key={m.id} match={m} index={i} />)}
           </div>
         ) : (
-          <EmptyState />
+          <Card>
+            <EmptyState
+              icon={Clock}
+              title="No jobs yet"
+              description="We'll notify you tomorrow morning. The pipeline runs nightly at 2 AM and your digest lands by 7 AM."
+            />
+          </Card>
         )}
 
-        {/* Footer note */}
-        <div className="mt-12 text-center text-sm text-gray-600">
-          <p>Pipeline runs nightly at 2 AM · New matches delivered by 7 AM</p>
-          <p className="mt-1">Questions? <a href="mailto:gargeypatel123@gmail.com" className="text-blue-400 hover:underline">gargeypatel123@gmail.com</a></p>
+        <div className="mt-12 text-center text-sm" style={{ color: "var(--text-muted)" }}>
+          <p>Pipeline runs nightly · New matches delivered by 7 AM</p>
+          <p className="mt-1">
+            Questions?{" "}
+            <a href="mailto:gargeypatel123@gmail.com" className="hover:underline" style={{ color: "var(--primary)" }}>
+              gargeypatel123@gmail.com
+            </a>
+          </p>
         </div>
       </div>
     </main>
   );
 }
 
-// ── Page Export ────────────────────────────────────────────────────────────────
 export default function DashboardClient() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-gray-400">Loading...</div>}>
+    <Suspense fallback={<div className="min-h-screen" style={{ background: "var(--bg)" }} />}>
       <DashboardContent />
     </Suspense>
   );

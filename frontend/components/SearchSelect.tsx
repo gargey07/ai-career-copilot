@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Search } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
+import { Chip } from "@/components/ui/Chip";
+import { Skeleton } from "@/components/ui/Skeleton";
 
 interface SearchSelectProps {
   label: string;
@@ -16,9 +19,9 @@ interface SearchSelectProps {
   helperText?: string;
 }
 
-// Reusable type-ahead multi-select: shows removable chips for selected
-// values, suggests matches as you type (from the backend taxonomy or a
-// local list), and always lets you add a value that isn't suggested.
+// Reusable type-ahead multi-select: chips for selected values, live
+// suggestions (backend taxonomy or a local list), always-available "add
+// custom". See docs/design-system.md §9.
 export default function SearchSelect({
   label,
   values,
@@ -30,9 +33,11 @@ export default function SearchSelect({
 }: SearchSelectProps) {
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const debouncedQuery = useDebouncedValue(query, 250);
+  const requestSeq = useRef(0); // guards against out-of-order responses
+  const debouncedQuery = useDebouncedValue(query, 150);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -57,21 +62,26 @@ export default function SearchSelect({
     setSuggestions(list.slice(0, 20));
   }, [debouncedQuery, staticOptions]);
 
-  // Backend taxonomy fetching (roles/tools/skills)
+  // Backend taxonomy fetching (roles/tools/skills). Keeps previous results
+  // visible while a new request is in flight, and ignores stale responses.
   useEffect(() => {
     if (!apiField) return;
-    let cancelled = false;
+    const seq = ++requestSeq.current;
+    setLoading(true);
     fetch(`${API_URL}/api/suggestions/${apiField}?q=${encodeURIComponent(debouncedQuery)}`)
       .then((r) => (r.ok ? r.json() : { results: [] }))
       .then((data) => {
-        if (!cancelled) setSuggestions(data.results || []);
+        if (seq === requestSeq.current) {
+          setSuggestions(data.results || []);
+          setLoading(false);
+        }
       })
       .catch(() => {
-        if (!cancelled) setSuggestions([]);
+        if (seq === requestSeq.current) {
+          setSuggestions([]);
+          setLoading(false);
+        }
       });
-    return () => {
-      cancelled = true;
-    };
   }, [debouncedQuery, apiField]);
 
   const addValue = (val: string) => {
@@ -92,78 +102,88 @@ export default function SearchSelect({
   const exactMatch = visibleSuggestions.some((s) => s.toLowerCase() === query.trim().toLowerCase());
 
   return (
-    <div ref={containerRef} className="relative">
-      <label className="block text-sm text-gray-400 mb-2">{label}</label>
+    <div ref={containerRef} className="relative space-y-1.5">
+      <label className="block text-sm font-medium" style={{ color: "var(--text-muted)" }}>
+        {label}
+      </label>
 
       {values.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-3">
+        <div className="flex flex-wrap gap-2 mb-2">
           {values.map((val) => (
-            <span
-              key={val}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-blue-600/30 border border-blue-500 text-blue-300"
-            >
-              {val}
-              <button
-                type="button"
-                onClick={() => removeValue(val)}
-                className="text-blue-300 hover:text-white transition-colors leading-none"
-                aria-label={`Remove ${val}`}
-              >
-                ×
-              </button>
-            </span>
+            <Chip key={val} label={val} onRemove={() => removeValue(val)} />
           ))}
         </div>
       )}
 
-      <input
-        type="text"
-        value={query}
-        onChange={(e) => {
-          setQuery(e.target.value);
-          setOpen(true);
-        }}
-        onFocus={() => setOpen(true)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            addValue(query);
-          }
-        }}
-        placeholder={placeholder || `Search ${label.toLowerCase()}…`}
-        className="w-full px-4 py-3 rounded-xl text-white placeholder-gray-600 transition"
-        style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}
-      />
+      <div className="relative">
+        <Search
+          size={18}
+          strokeWidth={1.75}
+          className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+          style={{ color: "var(--text-muted)" }}
+        />
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addValue(query);
+            }
+          }}
+          placeholder={placeholder || `Search ${label.toLowerCase()}…`}
+          className="w-full pl-10 pr-4 py-3 rounded-md text-[15px] transition placeholder:text-slate-400"
+          style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)" }}
+        />
+      </div>
 
-      {helperText && <p className="text-xs text-gray-600 mt-1.5">{helperText}</p>}
+      {helperText && <p className="text-xs" style={{ color: "var(--text-muted)" }}>{helperText}</p>}
 
-      {open && (query.length > 0 || visibleSuggestions.length > 0) && (
+      {open && (query.length > 0 || visibleSuggestions.length > 0 || loading) && (
         <div
-          className="absolute z-20 mt-1 w-full max-h-60 overflow-y-auto rounded-xl shadow-xl"
-          style={{ background: "#0f0f24", border: "1px solid rgba(255,255,255,0.1)" }}
+          className="absolute z-20 mt-1 w-full max-h-60 overflow-y-auto rounded-md"
+          style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-e2)" }}
         >
-          {visibleSuggestions.map((s) => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => addValue(s)}
-              className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-white/5 transition-colors"
-            >
-              {s}
-            </button>
-          ))}
-          {query.trim() && !exactMatch && (
-            <button
-              type="button"
-              onClick={() => addValue(query)}
-              className="w-full text-left px-4 py-2.5 text-sm border-t border-white/5"
-              style={{ color: "#60a5fa" }}
-            >
-              + Add &quot;{query.trim()}&quot;
-            </button>
-          )}
-          {visibleSuggestions.length === 0 && !query.trim() && (
-            <div className="px-4 py-2.5 text-sm text-gray-600">Type to search…</div>
+          {loading && visibleSuggestions.length === 0 ? (
+            <div className="p-2 space-y-2">
+              <Skeleton className="h-6 w-3/4" />
+              <Skeleton className="h-6 w-2/3" />
+              <Skeleton className="h-6 w-1/2" />
+            </div>
+          ) : (
+            <>
+              {visibleSuggestions.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => addValue(s)}
+                  className="w-full text-left px-4 py-2.5 text-sm transition hover:bg-[var(--surface-muted)]"
+                  style={{ color: "var(--text)" }}
+                >
+                  {s}
+                </button>
+              ))}
+              {query.trim() && !exactMatch && (
+                <button
+                  type="button"
+                  onClick={() => addValue(query)}
+                  className="w-full text-left px-4 py-2.5 text-sm font-medium border-t transition hover:bg-[var(--surface-muted)]"
+                  style={{ color: "var(--primary)", borderColor: "var(--border)" }}
+                >
+                  + Add &quot;{query.trim()}&quot;
+                </button>
+              )}
+              {!query.trim() && visibleSuggestions.length === 0 && (
+                <div className="px-4 py-2.5 text-sm" style={{ color: "var(--text-muted)" }}>
+                  Type to search…
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

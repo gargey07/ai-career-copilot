@@ -140,6 +140,197 @@ JOB_CATEGORIES = {
             "Model Deployment", "Research & Experimentation",
         ],
     },
+    "devops_engineer": {
+        "label": "DevOps / Cloud / SRE",
+        "search_queries": ["DevOps Engineer", "Site Reliability Engineer", "Cloud Engineer"],
+        "target_roles": [
+            "DevOps Engineer", "Site Reliability Engineer", "Cloud Engineer",
+            "Platform Engineer", "Infrastructure Engineer", "Cloud Architect",
+        ],
+        "tools": [
+            "Docker", "Kubernetes", "Terraform", "Ansible", "Jenkins", "GitHub Actions",
+            "GitLab CI", "AWS", "GCP", "Azure", "Prometheus", "Grafana", "Datadog",
+            "Helm", "ArgoCD", "Nginx", "Linux", "Bash", "Python", "Go",
+        ],
+        "skills": [
+            "CI/CD Pipelines", "Infrastructure as Code", "Container Orchestration",
+            "Monitoring & Observability", "Incident Response", "Cloud Architecture",
+            "Networking", "Security Hardening", "Auto-scaling", "Cost Optimization",
+            "Site Reliability", "Load Balancing", "Disaster Recovery",
+        ],
+    },
+    "data_engineer": {
+        "label": "Data Engineer",
+        "search_queries": ["Data Engineer", "Analytics Engineer", "ETL Developer"],
+        "target_roles": [
+            "Data Engineer", "Analytics Engineer", "ETL Developer",
+            "Big Data Engineer", "Data Platform Engineer",
+        ],
+        "tools": [
+            "Python", "SQL", "Spark", "Airflow", "dbt", "Kafka", "Snowflake",
+            "BigQuery", "Redshift", "Databricks", "Hadoop", "Flink", "AWS",
+            "GCP", "PostgreSQL", "Docker", "Terraform",
+        ],
+        "skills": [
+            "Data Pipelines", "ETL / ELT", "Data Modeling", "Data Warehousing",
+            "Stream Processing", "Batch Processing", "Data Quality", "Orchestration",
+            "SQL Optimization", "Schema Design", "Data Governance",
+        ],
+    },
+    "mobile_developer": {
+        "label": "Mobile Developer",
+        "search_queries": ["Mobile Developer", "iOS Developer", "Android Developer"],
+        "target_roles": [
+            "Mobile Developer", "iOS Developer", "Android Developer",
+            "React Native Developer", "Flutter Developer",
+        ],
+        "tools": [
+            "Swift", "SwiftUI", "Kotlin", "Java", "React Native", "Flutter", "Dart",
+            "Xcode", "Android Studio", "Firebase", "Expo", "Fastlane", "Git",
+        ],
+        "skills": [
+            "Mobile UI", "REST API Integration", "State Management", "Push Notifications",
+            "App Store Deployment", "Offline Storage", "Performance Optimization",
+            "Responsive Layouts", "Unit Testing", "Accessibility",
+        ],
+    },
+    "qa_engineer": {
+        "label": "QA / Test Engineer",
+        "search_queries": ["QA Engineer", "Test Automation Engineer", "SDET"],
+        "target_roles": [
+            "QA Engineer", "Test Automation Engineer", "SDET",
+            "Manual QA", "Quality Analyst", "Performance Test Engineer",
+        ],
+        "tools": [
+            "Selenium", "Cypress", "Playwright", "Appium", "JUnit", "TestNG", "Jest",
+            "Postman", "JMeter", "Jira", "TestRail", "Git", "Jenkins",
+        ],
+        "skills": [
+            "Test Automation", "Manual Testing", "Test Case Design", "Regression Testing",
+            "API Testing", "Performance Testing", "Bug Tracking", "CI Integration",
+            "Exploratory Testing", "Test Planning",
+        ],
+    },
+    "project_manager": {
+        "label": "Project / Program Manager",
+        "search_queries": ["Project Manager", "Program Manager", "Scrum Master"],
+        "target_roles": [
+            "Project Manager", "Program Manager", "Scrum Master",
+            "Delivery Manager", "Technical Project Manager",
+        ],
+        "tools": [
+            "Jira", "Asana", "Trello", "Monday.com", "Confluence", "Notion",
+            "MS Project", "Smartsheet", "Slack", "Miro", "Excel",
+        ],
+        "skills": [
+            "Agile", "Scrum", "Kanban", "Roadmapping", "Risk Management",
+            "Stakeholder Management", "Resource Planning", "Budgeting",
+            "Sprint Planning", "Reporting", "Cross-functional Leadership",
+        ],
+    },
+    "digital_marketer": {
+        "label": "Digital Marketing",
+        "search_queries": ["Digital Marketer", "Growth Marketer", "SEO Specialist"],
+        "target_roles": [
+            "Digital Marketer", "Growth Marketer", "SEO Specialist",
+            "Performance Marketer", "Content Marketer", "Social Media Manager",
+        ],
+        "tools": [
+            "Google Analytics", "Google Ads", "Meta Ads", "SEMrush", "Ahrefs",
+            "HubSpot", "Mailchimp", "Hootsuite", "Canva", "Google Tag Manager",
+            "Looker Studio", "WordPress",
+        ],
+        "skills": [
+            "SEO", "SEM", "Paid Media", "Email Marketing", "Content Strategy",
+            "Conversion Optimization", "Social Media Marketing", "Marketing Analytics",
+            "A/B Testing", "Copywriting", "Campaign Management", "Growth Hacking",
+        ],
+    },
+    "sales": {
+        "label": "Sales / Business Dev",
+        "search_queries": ["Sales Executive", "Account Executive", "Business Development"],
+        "target_roles": [
+            "Sales Executive", "Account Executive", "Business Development Manager",
+            "Sales Development Representative", "Account Manager", "Inside Sales",
+        ],
+        "tools": [
+            "Salesforce", "HubSpot", "Outreach", "Salesloft", "LinkedIn Sales Navigator",
+            "Pipedrive", "Zoho CRM", "Gong", "Apollo", "Excel",
+        ],
+        "skills": [
+            "Lead Generation", "Prospecting", "Cold Outreach", "Negotiation",
+            "Pipeline Management", "CRM Management", "Account Management",
+            "Closing", "Relationship Building", "Sales Forecasting", "Upselling",
+        ],
+    },
+    "content_writer": {
+        "label": "Content / Copywriting",
+        "search_queries": ["Content Writer", "Copywriter", "Technical Writer"],
+        "target_roles": [
+            "Content Writer", "Copywriter", "Technical Writer",
+            "Content Strategist", "Editor", "UX Writer",
+        ],
+        "tools": [
+            "Google Docs", "Notion", "WordPress", "Grammarly", "SurferSEO",
+            "Ahrefs", "Canva", "Figma", "Hemingway", "Contentful",
+        ],
+        "skills": [
+            "Copywriting", "Content Strategy", "SEO Writing", "Editing", "Storytelling",
+            "Technical Documentation", "Research", "Brand Voice", "Proofreading",
+            "Content Planning", "Long-form Writing",
+        ],
+    },
+    "hr_recruiter": {
+        "label": "HR / Recruiting",
+        "search_queries": ["HR Manager", "Recruiter", "Talent Acquisition"],
+        "target_roles": [
+            "HR Manager", "Recruiter", "Talent Acquisition Specialist",
+            "HR Business Partner", "People Operations", "HR Generalist",
+        ],
+        "tools": [
+            "Workday", "Greenhouse", "Lever", "BambooHR", "LinkedIn Recruiter",
+            "Naukri", "Indeed", "SAP SuccessFactors", "Excel", "Notion",
+        ],
+        "skills": [
+            "Talent Acquisition", "Sourcing", "Interviewing", "Onboarding",
+            "Employee Relations", "Performance Management", "HR Policy",
+            "Compensation & Benefits", "Stakeholder Management", "HR Analytics",
+        ],
+    },
+    "finance_analyst": {
+        "label": "Finance / Accounting",
+        "search_queries": ["Financial Analyst", "Accountant", "FP&A Analyst"],
+        "target_roles": [
+            "Financial Analyst", "Accountant", "FP&A Analyst",
+            "Finance Manager", "Investment Analyst", "Auditor",
+        ],
+        "tools": [
+            "Excel", "QuickBooks", "SAP", "Oracle", "Tally", "Power BI",
+            "Tableau", "SQL", "NetSuite", "Bloomberg Terminal",
+        ],
+        "skills": [
+            "Financial Modeling", "Forecasting", "Budgeting", "Variance Analysis",
+            "Financial Reporting", "Valuation", "Accounting", "Auditing",
+            "Data Analysis", "Cash Flow Management", "Compliance",
+        ],
+    },
+    "graphic_designer": {
+        "label": "Graphic / Brand Design",
+        "search_queries": ["Graphic Designer", "Brand Designer", "Visual Designer"],
+        "target_roles": [
+            "Graphic Designer", "Brand Designer", "Visual Designer",
+            "Illustrator", "Art Director", "Marketing Designer",
+        ],
+        "tools": [
+            "Photoshop", "Illustrator", "InDesign", "Figma", "After Effects",
+            "Canva", "Procreate", "CorelDRAW", "Blender", "Lightroom",
+        ],
+        "skills": [
+            "Brand Identity", "Typography", "Layout Design", "Illustration",
+            "Logo Design", "Color Theory", "Print Design", "Social Media Graphics",
+            "Motion Graphics", "Visual Storytelling", "Packaging Design",
+        ],
+    },
 }
 
 

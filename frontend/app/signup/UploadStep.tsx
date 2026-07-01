@@ -1,8 +1,14 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { UploadCloud, Link as LinkIcon, PencilLine, AlertTriangle, FileText } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import { emptyProfile, profileFromParsed, type Profile } from "@/lib/profile";
+import { SectionCard } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Field, Input } from "@/components/ui/Field";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { Stepper, type Step } from "@/components/ui/Stepper";
 
 interface UploadStepProps {
   onReady: (profile: Profile, resumeFilePath: string | null) => void;
@@ -12,6 +18,13 @@ const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const POLL_INTERVAL_MS = 2000;
 
 type Mode = "choose" | "url" | "loading";
+
+const PARSING_STEPS: Step[] = [
+  { label: "Uploaded", state: "done" },
+  { label: "AI Parsing", state: "active" },
+  { label: "Verified", state: "pending" },
+  { label: "Ready", state: "pending" },
+];
 
 export default function UploadStep({ onReady }: UploadStepProps) {
   const [mode, setMode] = useState<Mode>("choose");
@@ -32,10 +45,6 @@ export default function UploadStep({ onReady }: UploadStepProps) {
       setTestResult(`GET FAILED: ${e.message || e}`);
       return;
     }
-
-    // POST with a JSON body triggers a CORS preflight (OPTIONS) that a
-    // plain GET doesn't — tests that specifically, safely, with an empty
-    // body that Pydantic will reject (422) rather than creating real data.
     setTestResult((prev) => prev + " | Testing POST…");
     try {
       const res = await fetch(`${API_URL}/api/resumes/confirm`, {
@@ -61,14 +70,13 @@ export default function UploadStep({ onReady }: UploadStepProps) {
         const res = await fetch(`${API_URL}/api/resumes/parse-status/${jobId}`);
         if (!res.ok) throw new Error("Lost track of that upload. Please try again.");
         const data = await res.json();
-
         if (data.status === "done") {
           onReady(profileFromParsed(data.result || {}), data.file_path || null);
         } else if (data.status === "failed") {
           setError(data.error_message || "Couldn't parse that resume.");
           setMode("choose");
         } else {
-          pollStatus(jobId); // still pending/processing
+          pollStatus(jobId);
         }
       } catch (e: any) {
         setError(e.message || "Something went wrong checking your upload.");
@@ -90,10 +98,8 @@ export default function UploadStep({ onReady }: UploadStepProps) {
       setError(validationError);
       return;
     }
-
     setError("");
     setMode("loading");
-
     try {
       const formData = new FormData();
       formData.append("file", file);
@@ -117,7 +123,6 @@ export default function UploadStep({ onReady }: UploadStepProps) {
     }
     setError("");
     setMode("loading");
-
     try {
       const res = await fetch(`${API_URL}/api/resumes/upload-url`, {
         method: "POST",
@@ -136,153 +141,143 @@ export default function UploadStep({ onReady }: UploadStepProps) {
     }
   };
 
-  const cardStyle = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" };
-
+  // ── Loading state: stepper + skeleton of the review form ──────────────────
   if (mode === "loading") {
     return (
-      <div className="rounded-2xl p-12 text-center space-y-4" style={cardStyle}>
-        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 mx-auto animate-spin" />
-        <h2 className="font-semibold text-white text-lg">Reading your resume…</h2>
-        <p className="text-sm text-gray-500">Usually takes 5-15 seconds.</p>
-        <button
-          type="button"
-          onClick={() => {
-            stopPolling();
-            setMode("choose");
-          }}
-          className="text-sm text-gray-500 hover:text-white transition-colors"
-        >
-          Cancel
-        </button>
-      </div>
+      <SectionCard>
+        <div className="max-w-md mx-auto mb-8">
+          <Stepper steps={PARSING_STEPS} />
+        </div>
+        <div className="text-center mb-8">
+          <h2 className="text-lg font-semibold" style={{ color: "var(--text)" }}>Reading your resume…</h2>
+          <p className="text-sm mt-1" style={{ color: "var(--text-muted)" }}>This usually takes 5–15 seconds.</p>
+        </div>
+        <div className="space-y-3">
+          <Skeleton className="h-4 w-1/3" />
+          <Skeleton className="h-11 w-full" />
+          <Skeleton className="h-11 w-full" />
+          <Skeleton className="h-24 w-full" />
+        </div>
+        <div className="mt-6 text-center">
+          <button
+            type="button"
+            onClick={() => {
+              stopPolling();
+              setMode("choose");
+            }}
+            className="text-sm transition hover:opacity-70"
+            style={{ color: "var(--text-muted)" }}
+          >
+            Cancel
+          </button>
+        </div>
+      </SectionCard>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <div className="rounded-2xl p-8 space-y-6" style={cardStyle}>
-        <div>
-          <h2 className="font-semibold text-white text-lg">📄 Bring your resume</h2>
-          <p className="text-sm text-gray-500 mt-1">
-            We&apos;ll read it and pre-fill everything below — you just double-check it.
-          </p>
-        </div>
+    <SectionCard icon={FileText} title="Bring your resume">
+      <p className="text-sm -mt-3 mb-5" style={{ color: "var(--text-muted)" }}>
+        We&apos;ll read it and pre-fill everything below — you just double-check it.
+      </p>
 
-        {mode === "choose" && (
-          <>
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragOver(true);
-              }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDragOver(false);
-                const file = e.dataTransfer.files?.[0];
+      {mode === "choose" && (
+        <div className="space-y-5">
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) uploadFile(file);
+            }}
+            onClick={() => fileInputRef.current?.click()}
+            className="rounded-lg p-10 text-center cursor-pointer transition border-2 border-dashed"
+            style={{
+              borderColor: dragOver ? "var(--primary)" : "var(--border)",
+              background: dragOver ? "#FEF9EF" : "transparent",
+            }}
+          >
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full" style={{ background: "var(--surface-muted)" }}>
+              <UploadCloud size={24} strokeWidth={1.75} style={{ color: "var(--primary)" }} />
+            </div>
+            <p className="font-medium" style={{ color: "var(--text)" }}>Drag &amp; drop your resume here</p>
+            <p className="text-sm mt-1" style={{ color: "var(--text-muted)" }}>or click to browse — .pdf or .docx, max 5MB</p>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.docx"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
                 if (file) uploadFile(file);
               }}
-              onClick={() => fileInputRef.current?.click()}
-              className={`rounded-xl p-10 text-center cursor-pointer transition-all border-2 border-dashed ${
-                dragOver ? "border-blue-500 bg-blue-500/5" : "border-white/10 hover:border-white/20"
-              }`}
-            >
-              <div className="text-3xl mb-3">⬆️</div>
-              <p className="text-white font-medium">Drag & drop your resume here</p>
-              <p className="text-sm text-gray-500 mt-1">or click to browse — .pdf or .docx, max 5MB</p>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,.docx"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) uploadFile(file);
-                }}
-              />
-            </div>
-
-            <div className="flex items-center gap-3 text-xs text-gray-600">
-              <div className="flex-1 h-px bg-white/10" />
-              or
-              <div className="flex-1 h-px bg-white/10" />
-            </div>
-
-            <div className="flex flex-col sm:flex-row gap-3">
-              <button
-                type="button"
-                onClick={() => setMode("url")}
-                className="flex-1 px-4 py-3 rounded-xl text-sm font-medium border border-white/10 text-gray-300 hover:border-white/20 hover:text-white transition-all"
-              >
-                🔗 Paste a resume URL
-              </button>
-              <button
-                type="button"
-                onClick={() => onReady(emptyProfile(), null)}
-                className="flex-1 px-4 py-3 rounded-xl text-sm font-medium border border-white/10 text-gray-300 hover:border-white/20 hover:text-white transition-all"
-              >
-                ✍️ Start from scratch
-              </button>
-            </div>
-          </>
-        )}
-
-        {mode === "url" && (
-          <div className="space-y-3">
-            <label className="block text-sm text-gray-400">Link to your resume (Google Drive, Dropbox, personal site…)</label>
-            <input
-              type="url"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://..."
-              className="w-full px-4 py-3 rounded-xl text-white placeholder-gray-600 transition"
-              style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}
             />
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={submitUrl}
-                className="px-6 py-3 rounded-xl text-sm font-semibold text-white transition-all"
-                style={{ background: "linear-gradient(135deg,#3b82f6,#8b5cf6)" }}
-              >
-                Continue
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setMode("choose");
-                  setError("");
-                }}
-                className="px-6 py-3 rounded-xl text-sm text-gray-400 hover:text-white transition-colors"
-              >
-                Back
-              </button>
-            </div>
           </div>
-        )}
 
-        {error && (
-          <div
-            className="rounded-xl px-4 py-3 text-red-400 text-sm"
-            style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)" }}
-          >
-            ⚠️ {error}
-            {" "}
-            <button type="button" onClick={() => onReady(emptyProfile(), null)} className="underline hover:text-red-300">
+          <div className="flex items-center gap-3 text-xs" style={{ color: "var(--text-muted)" }}>
+            <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
+            or
+            <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Button variant="secondary" className="flex-1" onClick={() => setMode("url")}>
+              <LinkIcon size={16} strokeWidth={1.75} />
+              Paste a resume URL
+            </Button>
+            <Button variant="secondary" className="flex-1" onClick={() => onReady(emptyProfile(), null)}>
+              <PencilLine size={16} strokeWidth={1.75} />
+              Start from scratch
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {mode === "url" && (
+        <div className="space-y-4">
+          <Field label="Link to your resume" helper="Google Drive, Dropbox, or a personal site.">
+            <Input type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" />
+          </Field>
+          <div className="flex gap-3">
+            <Button variant="primary" onClick={submitUrl}>Continue</Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setMode("choose");
+                setError("");
+              }}
+            >
+              Back
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="mt-5 rounded-md px-4 py-3 text-sm flex items-start gap-2" style={{ background: "#FEF2F2", border: "1px solid #FECACA", color: "var(--coral)" }}>
+          <AlertTriangle size={18} strokeWidth={1.75} className="mt-0.5 shrink-0" />
+          <span>
+            {error}{" "}
+            <button type="button" onClick={() => onReady(emptyProfile(), null)} className="underline font-medium hover:opacity-70">
               Fill in manually instead
             </button>
-          </div>
-        )}
-
-        {/* Temporary debug tools — remove once uploads are confirmed working */}
-        <div className="pt-2 border-t border-white/5 space-y-2">
-          <button type="button" onClick={testConnection} className="text-xs underline text-gray-500 hover:text-gray-300">
-            Test backend connection
-          </button>
-          <p className="text-xs text-gray-700 break-all">API_URL: {API_URL}</p>
-          {testResult && <p className="text-xs text-gray-400 break-all">Result: {testResult}</p>}
+          </span>
         </div>
+      )}
+
+      {/* Temporary debug tools — remove once uploads are confirmed stable in prod. */}
+      <div className="mt-6 pt-4 border-t space-y-2" style={{ borderColor: "var(--border)" }}>
+        <button type="button" onClick={testConnection} className="text-xs underline transition hover:opacity-70" style={{ color: "var(--text-muted)" }}>
+          Test backend connection
+        </button>
+        <p className="text-xs break-all" style={{ color: "#94A3B8" }}>API_URL: {API_URL}</p>
+        {testResult && <p className="text-xs break-all" style={{ color: "var(--text-muted)" }}>Result: {testResult}</p>}
       </div>
-    </div>
+    </SectionCard>
   );
 }

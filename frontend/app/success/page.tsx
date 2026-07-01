@@ -2,79 +2,71 @@
 
 import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import { CheckCircle2, Search, Sparkles, FileText, Mail, ArrowRight } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+
+const TIMELINE: { time: string; icon: LucideIcon; desc: string }[] = [
+  { time: "Tonight 2 AM", icon: Search, desc: "Our AI scans 5+ job boards and finds fresh roles for you." },
+  { time: "Tonight 6 AM", icon: Sparkles, desc: "Gemini matches the best jobs to your exact profile." },
+  { time: "Tonight 6:30 AM", icon: FileText, desc: "AI rewrites your resume tailored for each job." },
+  { time: "Tomorrow 7 AM", icon: Mail, desc: "Digest lands in your inbox — ready to apply in 2 minutes." },
+];
 
 function SuccessContent() {
   const params = useSearchParams();
-  const name   = params.get("name") || "Friend";
-  const id     = params.get("id") || "";
+  const name = params.get("name") || "Friend";
+  const id = params.get("id") || "";
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center px-6">
-      {/* Background */}
-      <div className="fixed inset-0 -z-10 pointer-events-none">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[700px] rounded-full bg-blue-600/10 blur-[120px]" />
-      </div>
-
+    <main className="min-h-screen flex flex-col items-center justify-center px-6 py-12" style={{ background: "var(--bg)", color: "var(--text)" }}>
       <div className="max-w-lg w-full text-center animate-fade-in space-y-8">
-        {/* Celebration icon */}
-        <div className="relative inline-block animate-float">
-          <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-5xl mx-auto shadow-2xl">
-            🎉
-          </div>
-          <div className="absolute -top-2 -right-2 w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-lg">✓</div>
+        <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-2xl" style={{ background: "#ECFDF5" }}>
+          <CheckCircle2 size={40} strokeWidth={1.75} style={{ color: "var(--success)" }} />
         </div>
 
-        {/* Heading */}
         <div>
-          <h1 className="text-4xl md:text-5xl font-extrabold mb-3">
-            You&apos;re in,{" "}
-            <span className="text-gradient">{name.split(" ")[0]}!</span>
+          <h1 className="text-4xl md:text-5xl font-extrabold mb-3" style={{ color: "var(--text)" }}>
+            You&apos;re in, <span className="text-gradient">{name.split(" ")[0]}!</span>
           </h1>
-          <p className="text-gray-400 text-lg">
+          <p className="text-lg" style={{ color: "var(--text-muted)" }}>
             Your profile is live. The AI is already learning your preferences.
           </p>
         </div>
 
-        {/* What happens next */}
-        <div className="glass rounded-2xl p-8 text-left space-y-5">
-          <h2 className="font-semibold text-white text-lg mb-4">⏰ What happens next</h2>
-
-          {[
-            { time: "Tonight 2 AM",  icon: "🔍", desc: "Our AI scans 5+ job boards and finds fresh UI/UX roles" },
-            { time: "Tonight 6 AM",  icon: "🤖", desc: "Gemini matches the best jobs to your exact profile" },
-            { time: "Tonight 6:30 AM", icon: "📝", desc: "AI rewrites your resume tailored for each job" },
-            { time: "Tomorrow 7 AM", icon: "📧", desc: "Digest lands in your inbox — ready to apply in 2 minutes" },
-          ].map((item) => (
+        <div className="rounded-lg p-8 text-left space-y-5" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-e1)" }}>
+          <h2 className="font-semibold text-lg" style={{ color: "var(--text)" }}>What happens next</h2>
+          {TIMELINE.map((item) => (
             <div key={item.time} className="flex items-start gap-4">
-              <div className="flex-shrink-0 text-2xl">{item.icon}</div>
+              <div className="flex-shrink-0 flex h-9 w-9 items-center justify-center rounded-md" style={{ background: "#FEF3C7" }}>
+                <item.icon size={18} strokeWidth={1.75} style={{ color: "var(--primary)" }} />
+              </div>
               <div>
-                <div className="text-sm font-semibold text-blue-300">{item.time}</div>
-                <div className="text-sm text-gray-400">{item.desc}</div>
+                <div className="text-sm font-semibold" style={{ color: "var(--text)" }}>{item.time}</div>
+                <div className="text-sm" style={{ color: "var(--text-muted)" }}>{item.desc}</div>
               </div>
             </div>
           ))}
         </div>
 
-        {/* Dashboard link */}
         {id && (
-          <div className="glass rounded-2xl p-6 text-center">
-            <p className="text-sm text-gray-400 mb-4">
+          <div className="rounded-lg p-6 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-e1)" }}>
+            <p className="text-sm mb-4" style={{ color: "var(--text-muted)" }}>
               Bookmark your personal dashboard — check your matches anytime:
             </p>
             <a
               href={`/dashboard?user_id=${id}`}
-              id="success-dashboard-link"
-              className="inline-block px-6 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 font-semibold text-white transition-all text-sm"
+              className="inline-flex items-center gap-2 px-6 py-3 rounded-md font-semibold text-white transition hover:opacity-90 text-sm"
+              style={{ background: "var(--primary)", boxShadow: "var(--shadow-e1)" }}
             >
-              Open My Dashboard →
+              Open My Dashboard
+              <ArrowRight size={16} strokeWidth={2} />
             </a>
           </div>
         )}
 
-        {/* Footer */}
-        <p className="text-sm text-gray-600">
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           Email us at{" "}
-          <a href="mailto:gargeypatel123@gmail.com" className="text-blue-400 hover:underline">
+          <a href="mailto:gargeypatel123@gmail.com" className="hover:underline" style={{ color: "var(--primary)" }}>
             gargeypatel123@gmail.com
           </a>{" "}
           if you have questions.
@@ -86,7 +78,7 @@ function SuccessContent() {
 
 export default function SuccessPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-gray-400">Loading...</div>}>
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center" style={{ color: "var(--text-muted)" }}>Loading…</div>}>
       <SuccessContent />
     </Suspense>
   );

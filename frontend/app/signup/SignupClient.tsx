@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import UploadStep from "./UploadStep";
-import ReviewStep from "./ReviewStep";
+import ProfileEditor from "./ProfileEditor";
 import { emptyProfile, type Profile } from "@/lib/profile";
+import { BrandMark } from "@/components/BrandMark";
 
 type Step = "upload" | "review";
 
@@ -25,35 +26,19 @@ export default function SignupClient() {
   };
 
   return (
-    <main className="min-h-screen flex flex-col" style={{ background: "#060614", color: "white" }}>
-      {/* Background */}
-      <div className="fixed inset-0 -z-10 pointer-events-none">
-        <div className="absolute top-[-10%] left-[-5%]  w-[500px] h-[500px] rounded-full bg-blue-600/15   blur-[100px]" />
-        <div className="absolute bottom-[-10%] right-[-5%] w-[400px] h-[400px] rounded-full bg-purple-600/15 blur-[100px]" />
-      </div>
-
-      {/* Nav */}
-      <nav className="flex items-center justify-between px-6 py-5 max-w-4xl mx-auto w-full">
-        <a href="/" className="flex items-center gap-2 group">
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold text-white" style={{ background: "linear-gradient(135deg,#3b82f6,#8b5cf6)" }}>
-            AI
-          </div>
-          <span className="font-semibold text-white group-hover:text-blue-300 transition-colors">Career Copilot</span>
-        </a>
-        <span className="text-sm text-gray-500">Free Beta — No credit card</span>
+    <main className="min-h-screen flex flex-col" style={{ background: "var(--bg)", color: "var(--text)" }}>
+      <nav className="flex items-center justify-between px-6 py-5 max-w-3xl mx-auto w-full">
+        <BrandMark />
+        <span className="text-sm" style={{ color: "var(--text-muted)" }}>Free Beta — No credit card</span>
       </nav>
 
-      {/* Form */}
-      <div className="flex-1 flex items-start justify-center px-4 py-10">
+      <div className="flex-1 flex items-start justify-center px-4 py-8">
         <div className="w-full max-w-2xl">
-          <div className="text-center mb-10">
-            <h1 className="text-4xl font-extrabold mb-3">
-              Set up your{" "}
-              <span style={{ background: "linear-gradient(135deg,#60a5fa,#a78bfa)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
-                profile
-              </span>
+          <div className="text-center mb-8">
+            <h1 className="text-3xl sm:text-4xl font-extrabold mb-3" style={{ color: "var(--text)" }}>
+              Set up your <span className="text-gradient">profile</span>
             </h1>
-            <p className="text-gray-400">
+            <p style={{ color: "var(--text-muted)" }}>
               {step === "upload"
                 ? "Bring a resume, paste a link, or start from scratch."
                 : "Takes 3 minutes. Your first digest arrives tomorrow at 7 AM."}
@@ -62,7 +47,7 @@ export default function SignupClient() {
 
           {step === "upload" && <UploadStep onReady={handleUploadReady} />}
           {step === "review" && (
-            <ReviewStep initialProfile={profile} resumeFilePath={resumeFilePath} onConfirmed={handleConfirmed} />
+            <ProfileEditor initialProfile={profile} resumeFilePath={resumeFilePath} onConfirmed={handleConfirmed} />
           )}
         </div>
       </div>

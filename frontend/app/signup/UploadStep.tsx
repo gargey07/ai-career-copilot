@@ -23,13 +23,30 @@ export default function UploadStep({ onReady }: UploadStepProps) {
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const testConnection = async () => {
-    setTestResult("Testing…");
+    setTestResult("Testing GET…");
     try {
       const res = await fetch(`${API_URL}/health`);
       const text = await res.text();
-      setTestResult(`${res.status} ${res.ok ? "OK" : ""} — ${text}`);
+      setTestResult(`GET: ${res.status} ${res.ok ? "OK" : ""} — ${text}`);
     } catch (e: any) {
-      setTestResult(`FAILED: ${e.message || e}`);
+      setTestResult(`GET FAILED: ${e.message || e}`);
+      return;
+    }
+
+    // POST with a JSON body triggers a CORS preflight (OPTIONS) that a
+    // plain GET doesn't — tests that specifically, safely, with an empty
+    // body that Pydantic will reject (422) rather than creating real data.
+    setTestResult((prev) => prev + " | Testing POST…");
+    try {
+      const res = await fetch(`${API_URL}/api/resumes/confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const text = await res.text();
+      setTestResult((prev) => prev.replace(" | Testing POST…", "") + ` | POST: ${res.status} — ${text.slice(0, 150)}`);
+    } catch (e: any) {
+      setTestResult((prev) => prev.replace(" | Testing POST…", "") + ` | POST FAILED: ${e.message || e}`);
     }
   };
 

@@ -18,8 +18,20 @@ export default function UploadStep({ onReady }: UploadStepProps) {
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  const [testResult, setTestResult] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const testConnection = async () => {
+    setTestResult("Testing…");
+    try {
+      const res = await fetch(`${API_URL}/health`);
+      const text = await res.text();
+      setTestResult(`${res.status} ${res.ok ? "OK" : ""} — ${text}`);
+    } catch (e: any) {
+      setTestResult(`FAILED: ${e.message || e}`);
+    }
+  };
 
   const stopPolling = () => {
     if (pollTimer.current) clearTimeout(pollTimer.current);
@@ -244,6 +256,15 @@ export default function UploadStep({ onReady }: UploadStepProps) {
             </button>
           </div>
         )}
+
+        {/* Temporary debug tools — remove once uploads are confirmed working */}
+        <div className="pt-2 border-t border-white/5 space-y-2">
+          <button type="button" onClick={testConnection} className="text-xs underline text-gray-500 hover:text-gray-300">
+            Test backend connection
+          </button>
+          <p className="text-xs text-gray-700 break-all">API_URL: {API_URL}</p>
+          {testResult && <p className="text-xs text-gray-400 break-all">Result: {testResult}</p>}
+        </div>
       </div>
     </div>
   );

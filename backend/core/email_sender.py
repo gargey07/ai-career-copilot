@@ -14,6 +14,7 @@ import resend
 from jinja2 import Environment, FileSystemLoader
 
 from core.config import get_settings
+from core.usage_guard import check_budget
 from database.supabase_client import get_supabase
 from pathlib import Path
 
@@ -86,6 +87,9 @@ async def send_morning_digest(user_id: str) -> bool:
             "match_score": m.get("match_score", 0.0),
             "pdf_url": m.get("pdf_url")
         })
+
+    if not check_budget("resend", settings.resend_daily_limit):
+        return False
 
     logger.info(f"   📧 Sending digest to {user.get('email')} with {len(jobs_data)} jobs")
 

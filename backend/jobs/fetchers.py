@@ -16,6 +16,7 @@ import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from core.config import get_settings
+from core.usage_guard import check_budget
 from database.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,8 @@ class AdzunaFetcher:
         if not self.app_id or not self.app_key:
             logger.warning("⚠️  Adzuna API keys not set — skipping")
             return []
+        if not check_budget("adzuna", settings.adzuna_daily_limit, amount=pages):
+            return []
 
         jobs = []
         async with httpx.AsyncClient(timeout=30) as client:
@@ -123,6 +126,8 @@ class JSearchFetcher:
         """Fetch jobs from JSearch (LinkedIn) via RapidAPI."""
         if not self.api_key:
             logger.warning("⚠️  JSearch API key not set — skipping")
+            return []
+        if not check_budget("jsearch", settings.jsearch_daily_limit, amount=num_pages):
             return []
 
         jobs = []

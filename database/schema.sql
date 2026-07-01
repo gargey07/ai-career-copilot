@@ -165,6 +165,20 @@ CREATE TABLE IF NOT EXISTS pipeline_status (
 );
 
 -- ============================================================
+-- API_USAGE TABLE
+-- Tracks daily call counts per external API (Adzuna, JSearch,
+-- Gemini, OpenAI, Resend) so the pipeline can enforce free-tier /
+-- spend budgets across runs. See backend/core/usage_guard.py.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS api_usage (
+  service     TEXT NOT NULL,
+  usage_date  DATE NOT NULL DEFAULT CURRENT_DATE,
+  count       INTEGER NOT NULL DEFAULT 0,
+  updated_at  TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (service, usage_date)
+);
+
+-- ============================================================
 -- ROW LEVEL SECURITY (RLS)
 -- Each user can only access their own data
 -- ============================================================
@@ -172,6 +186,9 @@ ALTER TABLE users         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_jobs     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE email_logs    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pipeline_status ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_usage     ENABLE ROW LEVEL SECURITY;
+-- No policies defined for api_usage — only the backend's service_role
+-- key (which bypasses RLS) should ever read or write it.
 
 -- Users can only read/update their own profile
 CREATE POLICY "users_own_profile" ON users

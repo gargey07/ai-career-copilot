@@ -56,6 +56,16 @@ class Settings(BaseSettings):
     gmail_user: str = ""
     gmail_app_password: str = ""
 
+    # Daily API budget caps — 0 means unlimited. Defaults are conservative
+    # estimates for common free tiers; check your actual plan and adjust
+    # via env vars rather than editing code.
+    adzuna_daily_limit: int = 200          # Adzuna free tier
+    jsearch_daily_limit: int = 5           # RapidAPI JSearch free tiers are usually ~150/month
+    gemini_generate_daily_limit: int = 1000
+    gemini_embed_daily_limit: int = 500
+    openai_daily_limit: int = 50           # spend safety valve — OpenAI has no free quota
+    resend_daily_limit: int = 100          # Resend free tier
+
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"

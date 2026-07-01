@@ -19,6 +19,7 @@ from typing import Optional
 import google.generativeai as genai
 
 from core.config import get_settings
+from core.usage_guard import check_budget, BudgetExceededError
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -58,6 +59,9 @@ class GeminiProvider(AIProvider):
         Calls Gemini to generate text.
         Automatically respects the 15 RPM rate limit with sleep().
         """
+        if not check_budget("gemini_generate", settings.gemini_generate_daily_limit):
+            raise BudgetExceededError("Gemini generate_text daily budget exhausted")
+
         global _last_gemini_call
 
         # Rate limiting: enforce minimum delay between calls
@@ -80,6 +84,8 @@ class GeminiProvider(AIProvider):
 
     async def embed_text(self, text: str) -> list[float]:
         """Embeds text using Gemini's text-embedding model."""
+        if not check_budget("gemini_embed", settings.gemini_embed_daily_limit):
+            raise BudgetExceededError("Gemini embed_text daily budget exhausted")
         try:
             result = genai.embed_content(
                 model=self.embed_model,
@@ -103,6 +109,8 @@ class OpenAIProvider(AIProvider):
         logger.info("✅ OpenAI provider initialized")
 
     async def generate_text(self, prompt: str, temperature: float = 0.3) -> str:
+        if not check_budget("openai", settings.openai_daily_limit):
+            raise BudgetExceededError("OpenAI daily budget exhausted")
         response = await self.client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
@@ -111,6 +119,8 @@ class OpenAIProvider(AIProvider):
         return response.choices[0].message.content.strip()
 
     async def embed_text(self, text: str) -> list[float]:
+        if not check_budget("openai", settings.openai_daily_limit):
+            raise BudgetExceededError("OpenAI daily budget exhausted")
         response = await self.client.embeddings.create(
             model="text-embedding-3-small",
             input=text,

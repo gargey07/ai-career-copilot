@@ -15,6 +15,7 @@ from datetime import date
 from core.ai import get_ai_provider
 from core.config import get_settings
 from core.skill_maps import expand_skills, match_skills_to_job
+from core.usage_guard import BudgetExceededError
 from database.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -243,6 +244,9 @@ async def run_optimizer_for_user(user_id: str) -> int:
             generated += 1
             logger.info(f"   ✅ Done: {job['title']} @ {job['company']}")
 
+        except BudgetExceededError as e:
+            logger.warning(f"   🚫 {e} — stopping AI generation for today.")
+            break
         except Exception as e:
             logger.error(f"   ❌ Failed for {job.get('title', match['job_id'])}: {e}")
 

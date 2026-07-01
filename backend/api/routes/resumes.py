@@ -270,7 +270,8 @@ async def confirm_profile(payload: ConfirmProfileRequest):
         "summary": payload.summary or None,
         "work_experience": [e.model_dump() for e in payload.work_experience],
         "education": [e.model_dump() for e in payload.education],
-        "links": payload.links.model_dump(),
+        # Links are stored as the individual linkedin_url/portfolio_url/github_url
+        # columns below — there is no combined "links" column in the users table.
         "confidence_flags": payload.confidence_flags,
         "resume_text": resume_text,
         "resume_file_path": payload.resume_file_path,

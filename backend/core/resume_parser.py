@@ -28,6 +28,7 @@ EMPTY_PROFILE = {
     "basic_info": {"full_name": "", "email": "", "phone": "", "location": ""},
     "summary": "",
     "work_experience": [],
+    "projects": [],
     "education": [],
     "target_roles": [],
     "skills": [],
@@ -43,6 +44,7 @@ return ONLY valid JSON (no markdown, no commentary, no code fences) matching exa
   "basic_info": {{"full_name": "", "email": "", "phone": "", "location": ""}},
   "summary": "",
   "work_experience": [{{"title": "", "company": "", "start_date": "", "end_date": "", "is_current": false, "bullets": [""]}}],
+  "projects": [{{"name": "", "project_type": "personal", "role": "", "description": "", "technologies": [""], "url": "", "github": ""}}],
   "education": [{{"school": "", "degree": "", "field_of_study": "", "start_date": "", "end_date": ""}}],
   "target_roles": [""],
   "skills": [""],
@@ -54,6 +56,8 @@ return ONLY valid JSON (no markdown, no commentary, no code fences) matching exa
 Rules:
 - "target_roles" = job titles this person is qualified for based on their experience (best guess, 1-4 roles).
 - "skills" = soft/hard competencies (e.g. "REST API Design", "User Research"). "tools" = named software/technologies/languages (e.g. "Figma", "Python").
+- "work_experience" = professional employment only (full-time, part-time, internships, paid freelance engagements).
+- "projects" = personal, academic, capstone, research, open-source, or portfolio work that is NOT employment. If the resume has a Projects section, or an item has no employer/salary context, it belongs here — never in work_experience. "project_type" is one of: personal, academic, freelance, research, open_source, capstone.
 - Dates as free text are fine (e.g. "Jan 2022", "2022", "Present").
 - "is_current" is true if the role is ongoing.
 - Add an entry to "confidence_flags" for any top-level field you could not find or are unsure about, e.g. {{"phone": "missing"}} or {{"summary": "low_confidence"}}. Omit fields you're confident about.
@@ -170,6 +174,22 @@ def build_resume_text_from_profile(profile: dict) -> str:
         for bullet in job.get("bullets", []) or []:
             if bullet:
                 lines.append(f"• {bullet}")
+
+    projects = profile.get("projects", []) or []
+    if projects:
+        # Projects are one of the strongest matching signals (see
+        # docs/AI_CAREER_INTELLIGENCE_ENGINE.md) — always in the text blob.
+        lines += ["", "PROJECTS"]
+        for proj in projects:
+            header = proj.get("name", "")
+            if proj.get("role"):
+                header += f" — {proj['role']}"
+            techs = ", ".join(proj.get("technologies", []) or [])
+            if techs:
+                header += f" ({techs})"
+            lines.append(header)
+            if proj.get("description"):
+                lines.append(f"• {proj['description']}")
 
     lines += ["", "EDUCATION"]
     for edu in profile.get("education", []) or []:

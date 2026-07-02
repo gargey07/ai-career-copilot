@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, ArrowRightLeft } from "lucide-react";
 import { Field, Input, Textarea } from "@/components/ui/Field";
 import { MonthYearField } from "@/components/ui/MonthYearField";
 
@@ -25,11 +25,14 @@ export const emptyExperience = (): ExperienceEntry => ({
 interface ExperienceSectionProps {
   entries: ExperienceEntry[];
   onChange: (entries: ExperienceEntry[]) => void;
+  // Strategy: users can move items between Experience and Projects
+  // (e.g. the parser filed a personal project as a job).
+  onMoveToProjects?: (index: number) => void;
 }
 
 // Repeatable work-experience cards. Used identically whether the data came
 // from a parsed resume or manual entry — one component, one shape.
-export default function ExperienceSection({ entries, onChange }: ExperienceSectionProps) {
+export default function ExperienceSection({ entries, onChange, onMoveToProjects }: ExperienceSectionProps) {
   const update = (index: number, patch: Partial<ExperienceEntry>) => {
     onChange(entries.map((e, i) => (i === index ? { ...e, ...patch } : e)));
   };
@@ -44,20 +47,34 @@ export default function ExperienceSection({ entries, onChange }: ExperienceSecti
           className="rounded-md p-5 space-y-4"
           style={{ background: "var(--surface-muted)", border: "1px solid var(--border)" }}
         >
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
             <span className="text-sm font-semibold" style={{ color: "var(--text)" }}>
               Experience {i + 1}
             </span>
-            <button
-              type="button"
-              onClick={() => remove(i)}
-              aria-label={`Remove experience ${i + 1}`}
-              className="inline-flex items-center gap-1.5 text-xs font-medium transition hover:opacity-70"
-              style={{ color: "var(--coral)" }}
-            >
-              <Trash2 size={15} strokeWidth={1.75} />
-              Remove
-            </button>
+            <div className="flex items-center gap-4">
+              {onMoveToProjects && (
+                <button
+                  type="button"
+                  onClick={() => onMoveToProjects(i)}
+                  className="inline-flex items-center gap-1.5 text-xs font-medium transition hover:opacity-70"
+                  style={{ color: "var(--text-muted)" }}
+                  title="Not a job? Move it to Projects."
+                >
+                  <ArrowRightLeft size={14} strokeWidth={1.75} />
+                  Move to Projects
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => remove(i)}
+                aria-label={`Remove experience ${i + 1}`}
+                className="inline-flex items-center gap-1.5 text-xs font-medium transition hover:opacity-70"
+                style={{ color: "var(--coral)" }}
+              >
+                <Trash2 size={15} strokeWidth={1.75} />
+                Remove
+              </button>
+            </div>
           </div>
 
           <div className="grid sm:grid-cols-2 gap-4">

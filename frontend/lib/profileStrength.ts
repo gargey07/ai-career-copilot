@@ -42,14 +42,21 @@ export function computeProfileStrength(profile: Profile, hasResume: boolean): Pr
     {
       key: "experience",
       label: "Experience",
-      weight: 15,
+      weight: 10,
       why: "Internships, freelance work and part-time jobs all improve matching quality.",
       done: profile.work_experience.length > 0,
     },
     {
+      key: "projects",
+      label: "Projects",
+      weight: 10,
+      why: "Projects showcase practical skills and are especially valuable for students and early-career professionals.",
+      done: profile.projects.length > 0,
+    },
+    {
       key: "education",
       label: "Education",
-      weight: 10,
+      weight: 5,
       why: "Education provides additional context for more accurate recommendations.",
       done: profile.education.length > 0,
     },

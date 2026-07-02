@@ -15,6 +15,7 @@ import {
   Plus,
   Trash2,
   Palette,
+  FolderKanban,
   MonitorSmartphone,
   Server,
   Layers,
@@ -29,6 +30,7 @@ import { API_URL } from "@/lib/api";
 import type { Profile } from "@/lib/profile";
 import { emptyEducation } from "@/lib/profile";
 import ExperienceSection from "@/components/ExperienceSection";
+import ProjectsSection from "@/components/ProjectsSection";
 import SearchSelect from "@/components/SearchSelect";
 import TemplatePicker from "@/components/TemplatePicker";
 import ProfileStrength, { RecommendedChip } from "@/components/ProfileStrength";
@@ -94,6 +96,50 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
 
   const canSubmit = !!profile.basic_info.full_name.trim() && !!profile.basic_info.email.trim() && !loading;
 
+  // Strategy: users can move items between Projects and Experience — e.g.
+  // the parser filed a personal project as a job (or the reverse). Convert
+  // the shape, drop nothing the user typed.
+  const moveExperienceToProjects = (index: number) => {
+    const exp = profile.work_experience[index];
+    if (!exp) return;
+    setProfile((p) => ({
+      ...p,
+      work_experience: p.work_experience.filter((_, i) => i !== index),
+      projects: [
+        ...p.projects,
+        {
+          name: exp.company || exp.title,
+          project_type: "personal",
+          role: exp.title,
+          description: (exp.bullets || []).filter(Boolean).join("\n"),
+          technologies: [],
+          url: "",
+          github: "",
+        },
+      ],
+    }));
+  };
+
+  const moveProjectToExperience = (index: number) => {
+    const proj = profile.projects[index];
+    if (!proj) return;
+    setProfile((p) => ({
+      ...p,
+      projects: p.projects.filter((_, i) => i !== index),
+      work_experience: [
+        ...p.work_experience,
+        {
+          title: proj.role || proj.name,
+          company: proj.name,
+          start_date: "",
+          end_date: "",
+          is_current: false,
+          bullets: proj.description ? proj.description.split("\n").filter(Boolean) : [],
+        },
+      ],
+    }));
+  };
+
   const handleConfirm = async () => {
     if (!canSubmit) return;
     setLoading(true);
@@ -154,7 +200,26 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
 
       {/* Work Experience */}
       <SectionCard icon={Briefcase} title="Work Experience" action={<RecommendedChip />}>
-        <ExperienceSection entries={profile.work_experience} onChange={(v) => update("work_experience", v)} />
+        <p className="text-sm -mt-3 mb-4" style={{ color: "var(--text-muted)" }}>
+          Professional work only — full-time, part-time, internships, freelance. Personal projects go in the next section.
+        </p>
+        <ExperienceSection
+          entries={profile.work_experience}
+          onChange={(v) => update("work_experience", v)}
+          onMoveToProjects={moveExperienceToProjects}
+        />
+      </SectionCard>
+
+      {/* Projects */}
+      <SectionCard icon={FolderKanban} title="Projects" action={<RecommendedChip />}>
+        <p className="text-sm -mt-3 mb-4" style={{ color: "var(--text-muted)" }}>
+          Personal, academic, freelance, or open-source work. Especially valuable for students and early-career professionals.
+        </p>
+        <ProjectsSection
+          entries={profile.projects}
+          onChange={(v) => update("projects", v)}
+          onMoveToExperience={moveProjectToExperience}
+        />
       </SectionCard>
 
       {/* Education */}

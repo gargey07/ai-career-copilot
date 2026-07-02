@@ -57,6 +57,19 @@ class ExperienceEntry(BaseModel):
     bullets: list[str] = []
 
 
+class ProjectEntry(BaseModel):
+    # Projects are NOT work experience — own section, own shape
+    # (docs/PRODUCT_STRATEGY_BETA.md). project_type: personal | academic |
+    # freelance | research | open_source | capstone.
+    name: str = ""
+    project_type: str = "personal"
+    role: str = ""
+    description: str = ""
+    technologies: list[str] = []
+    url: str = ""
+    github: str = ""
+
+
 class EducationEntry(BaseModel):
     school: str = ""
     degree: str = ""
@@ -82,6 +95,7 @@ class ConfirmProfileRequest(BaseModel):
     basic_info: BasicInfo
     summary: str = ""
     work_experience: list[ExperienceEntry] = Field(default_factory=list)
+    projects: list[ProjectEntry] = Field(default_factory=list)
     education: list[EducationEntry] = Field(default_factory=list)
     target_roles: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
@@ -315,6 +329,7 @@ async def confirm_profile(payload: ConfirmProfileRequest, background_tasks: Back
         "preferred_locations": payload.preferred_locations,
         "summary": payload.summary or None,
         "work_experience": [e.model_dump() for e in payload.work_experience],
+        "projects": [p.model_dump() for p in payload.projects],
         "education": [e.model_dump() for e in payload.education],
         # Links are stored as the individual linkedin_url/portfolio_url/github_url
         # columns below — there is no combined "links" column in the users table.
@@ -330,17 +345,19 @@ async def confirm_profile(payload: ConfirmProfileRequest, background_tasks: Back
         "is_active": True,
     }
 
-    try:
-        resp = supabase.table("users").upsert(row, on_conflict="email").execute()
-    except Exception as e:
-        # resume_template is a newer column — if this database hasn't run the
-        # migration yet, save everything else rather than failing the signup.
-        if "resume_template" in str(e):
-            logger.warning("users.resume_template column missing — run the migration in database/schema.sql")
-            row.pop("resume_template", None)
+    # Newer columns — if this database hasn't run the migration yet, drop the
+    # offending column and retry so a signup never fails on a missing column.
+    newer_columns = ["resume_template", "projects"]
+    while True:
+        try:
             resp = supabase.table("users").upsert(row, on_conflict="email").execute()
-        else:
-            raise
+            break
+        except Exception as e:
+            missing = next((c for c in newer_columns if c in row and c in str(e)), None)
+            if missing is None:
+                raise
+            logger.warning(f"users.{missing} column missing — run the migration in database/schema.sql")
+            row.pop(missing, None)
     if not resp.data:
         raise HTTPException(500, "Failed to save profile.")
 

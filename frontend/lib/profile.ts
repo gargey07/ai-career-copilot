@@ -1,5 +1,27 @@
 import type { ExperienceEntry } from "@/components/ExperienceSection";
 
+// Projects are NOT work experience — separate section, separate shape
+// (docs/PRODUCT_STRATEGY_BETA.md).
+export interface ProjectEntry {
+  name: string;
+  project_type: string; // personal | academic | freelance | research | open_source | capstone
+  role: string;
+  description: string;
+  technologies: string[];
+  url: string;
+  github: string;
+}
+
+export const emptyProject = (): ProjectEntry => ({
+  name: "",
+  project_type: "personal",
+  role: "",
+  description: "",
+  technologies: [],
+  url: "",
+  github: "",
+});
+
 export interface EducationEntry {
   school: string;
   degree: string;
@@ -36,6 +58,7 @@ export interface Profile {
   basic_info: BasicInfo;
   summary: string;
   work_experience: ExperienceEntry[];
+  projects: ProjectEntry[];
   education: EducationEntry[];
   target_roles: string[];
   skills: string[];
@@ -54,6 +77,7 @@ export function emptyProfile(): Profile {
     basic_info: { full_name: "", email: "", phone: "", location: "" },
     summary: "",
     work_experience: [],
+    projects: [],
     education: [],
     target_roles: [],
     skills: [],

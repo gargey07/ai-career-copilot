@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS users (
   -- Resume data
   summary              TEXT,                        -- short professional summary
   work_experience       JSONB DEFAULT '[]'::jsonb,   -- [{title, company, start_date, end_date, is_current, bullets:[]}]
+  projects              JSONB DEFAULT '[]'::jsonb,   -- [{name, project_type, role, description, technologies:[], url, github}] — NOT work experience
   education             JSONB DEFAULT '[]'::jsonb,   -- [{school, degree, field_of_study, start_date, end_date}]
   resume_text         TEXT,                        -- flattened plain-text resume — kept in sync from structured
                                                      -- data on save so matcher.py / optimizer.py need no changes
@@ -294,6 +295,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS skills               TEXT[] DEFAULT '
 ALTER TABLE users ADD COLUMN IF NOT EXISTS work_type            TEXT[] DEFAULT '{}';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS summary              TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS work_experience      JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS projects             JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS education            JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS resume_file_path    TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS resume_template     TEXT DEFAULT 'modern';

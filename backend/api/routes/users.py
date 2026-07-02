@@ -28,8 +28,9 @@ def compute_profile_strength(user: dict) -> int:
     checks = [
         (20, bool(user.get("resume_file_path"))),
         (10, has(user.get("summary"))),
-        (15, bool(user.get("work_experience") or [])),
-        (10, bool(user.get("education") or [])),
+        (10, bool(user.get("work_experience") or [])),
+        (10, bool(user.get("projects") or [])),
+        (5, bool(user.get("education") or [])),
         (10, len(user.get("skills") or []) >= 3),
         (10, bool(user.get("target_roles") or [])),
         (5, bool(user.get("tools") or [])),
@@ -46,16 +47,19 @@ async def get_dashboard(user_id: str):
     """Return a user's profile summary + their matched jobs for the dashboard."""
     supabase = get_supabase()
 
-    user_resp = (
-        supabase.table("users")
-        .select(
-            "id, name, email, target_roles, summary, work_experience, education, "
-            "skills, tools, preferred_locations, phone, location, resume_file_path, "
-            "linkedin_url, portfolio_url, github_url"
-        )
-        .eq("id", user_id)
-        .execute()
+    base_fields = (
+        "id, name, email, target_roles, summary, work_experience, education, "
+        "skills, tools, preferred_locations, phone, location, resume_file_path, "
+        "linkedin_url, portfolio_url, github_url"
     )
+    try:
+        user_resp = (
+            supabase.table("users").select(f"{base_fields}, projects").eq("id", user_id).execute()
+        )
+    except Exception:
+        # projects is a newer column — dashboards must keep working on a
+        # database that hasn't run the migration in database/schema.sql yet.
+        user_resp = supabase.table("users").select(base_fields).eq("id", user_id).execute()
     if not user_resp.data:
         raise HTTPException(404, "We couldn't find a profile for this link.")
 

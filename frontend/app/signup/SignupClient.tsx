@@ -76,7 +76,7 @@ export default function SignupClient() {
             <p style={{ color: "var(--text-muted)" }}>
               {step === "upload"
                 ? "Bring a resume, paste a link, or start from scratch."
-                : "Takes 3 minutes. Your first digest arrives tomorrow at 7 AM."}
+                : "Takes 3 minutes. Your first matches start arriving right after you confirm."}
             </p>
           </div>
 

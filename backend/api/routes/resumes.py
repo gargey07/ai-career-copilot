@@ -276,8 +276,27 @@ async def get_parse_status(job_id: str):
     return resp.data[0]
 
 
+async def _match_new_user(user_id: str) -> None:
+    """
+    Instant first match — a core journey step (docs/PRODUCT_STRATEGY_BETA.md):
+    signup must end with real matches on the dashboard, not "come back
+    tomorrow". Runs after the confirm response is sent; uses the same
+    matcher as the nightly pipeline (vector when available, keyword
+    fallback otherwise). Best-effort: an empty job pool or AI budget cap
+    just means fewer/no matches, never a failed signup.
+    """
+    try:
+        from core.matcher import match_jobs_for_user, store_matches
+
+        matches = await match_jobs_for_user(user_id)
+        stored = await store_matches(user_id, matches)
+        logger.info(f"⚡ Instant first match for {user_id}: {stored} matches stored")
+    except Exception as e:
+        logger.warning(f"⚠️  Instant first match failed for {user_id}: {e}")
+
+
 @router.post("/confirm")
-async def confirm_profile(payload: ConfirmProfileRequest):
+async def confirm_profile(payload: ConfirmProfileRequest, background_tasks: BackgroundTasks):
     supabase = get_supabase()
     profile_dict = payload.model_dump()
     resume_text = build_resume_text_from_profile(profile_dict)
@@ -325,4 +344,6 @@ async def confirm_profile(payload: ConfirmProfileRequest):
     if not resp.data:
         raise HTTPException(500, "Failed to save profile.")
 
-    return {"id": resp.data[0]["id"]}
+    user_id = resp.data[0]["id"]
+    background_tasks.add_task(_match_new_user, user_id)
+    return {"id": user_id}

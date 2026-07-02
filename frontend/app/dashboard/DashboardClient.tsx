@@ -7,9 +7,6 @@ import {
   Briefcase,
   Target,
   FileText,
-  Send,
-  CalendarCheck,
-  Award,
   Download,
   ExternalLink,
   AlertTriangle,
@@ -228,9 +225,13 @@ function DashboardContent() {
   const jobsFound = todayMatches.length;
   const resumesReady = todayMatches.filter((m) => m.pdf_url).length;
   const bestMatch = todayMatches.length ? Math.round(Math.max(...todayMatches.map((m) => m.match_score)) * 100) : 0;
-  const applications = allJobs.filter((j) => j.status === "applied").length;
-  const interviews = allJobs.filter((j) => j.status === "interviewing").length;
-  const offers = allJobs.filter((j) => j.status === "offered").length;
+  // Last day we actually delivered matches — a real, verifiable metric
+  // (strategy rule: never display applications/interviews/offers until we
+  // can verify them).
+  const lastMatchDate = allJobs.reduce<string | null>(
+    (latest, j) => (j.digest_date && (!latest || j.digest_date > latest) ? j.digest_date : latest),
+    null
+  );
 
   return (
     <main className="min-h-screen" style={{ background: "var(--bg)", color: "var(--text)" }}>
@@ -258,8 +259,8 @@ function DashboardContent() {
           </h1>
           <p className="mt-2" style={{ color: "var(--text-muted)" }}>
             {jobsFound > 0
-              ? `We found ${jobsFound} job${jobsFound > 1 ? "s" : ""} for you today. Your AI has tailored a resume for each.`
-              : "Your first matches are on the way — the pipeline runs nightly."}
+              ? `We found ${jobsFound} job${jobsFound > 1 ? "s" : ""} matching your profile today.`
+              : "Your matches are being prepared — new jobs arrive every morning."}
           </p>
         </div>
 
@@ -270,27 +271,23 @@ function DashboardContent() {
           <StatCard icon={Target} label="Best Match" value={`${bestMatch}%`} />
         </div>
 
-        {/* Progress */}
+        {/* Pipeline status — only real, verifiable info (see product strategy:
+            no Applications/Interviews/Offers until we can actually track them). */}
         <Card className="p-5 mb-10 animate-fade-in">
-          <div className="text-xs font-semibold uppercase tracking-wide mb-4" style={{ color: "var(--text-muted)" }}>
-            Your progress
-          </div>
-          <div className="grid grid-cols-3 gap-4">
-            {[
-              { icon: Send, label: "Applications", value: applications },
-              { icon: CalendarCheck, label: "Interviews", value: interviews },
-              { icon: Award, label: "Offers", value: offers },
-            ].map((p) => (
-              <div key={p.label} className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-md shrink-0" style={{ background: "var(--surface-muted)" }}>
-                  <p.icon size={18} strokeWidth={1.75} style={{ color: "var(--text-muted)" }} />
-                </div>
-                <div>
-                  <div className="text-xl font-extrabold" style={{ color: "var(--text)" }}>{p.value}</div>
-                  <div className="text-xs" style={{ color: "var(--text-muted)" }}>{p.label}</div>
-                </div>
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-md shrink-0" style={{ background: "var(--surface-muted)" }}>
+              <Clock size={18} strokeWidth={1.75} style={{ color: "var(--text-muted)" }} />
+            </div>
+            <div>
+              <div className="text-sm font-semibold" style={{ color: "var(--text)" }}>
+                {lastMatchDate ? `Last matches delivered ${lastMatchDate === today ? "today" : `on ${lastMatchDate}`}` : "No matches delivered yet"}
               </div>
-            ))}
+              <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                {allJobs.length > 0
+                  ? `${allJobs.length} match${allJobs.length > 1 ? "es" : ""} delivered in total`
+                  : "Matching runs after signup and every morning after that"}
+              </div>
+            </div>
           </div>
         </Card>
 
@@ -304,14 +301,14 @@ function DashboardContent() {
           <Card>
             <EmptyState
               icon={Clock}
-              title="No jobs yet"
-              description="We'll notify you tomorrow morning. The pipeline runs nightly at 2 AM and your digest lands by 7 AM."
+              title="No matches yet today"
+              description="Your first matches are usually ready within a few minutes of signing up — try refreshing. After that, new matches arrive every morning."
             />
           </Card>
         )}
 
         <div className="mt-12 text-center text-sm" style={{ color: "var(--text-muted)" }}>
-          <p>Pipeline runs nightly · New matches delivered by 7 AM</p>
+          <p>New matches every morning</p>
           <p className="mt-1">
             Questions?{" "}
             <a href="mailto:gargeypatel123@gmail.com" className="hover:underline" style={{ color: "var(--primary)" }}>

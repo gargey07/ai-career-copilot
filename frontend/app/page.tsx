@@ -7,18 +7,20 @@ import { BRAND_NAME } from "@/lib/brand";
 import type { LucideIcon } from "lucide-react";
 
 // ── Features Data ─────────────────────────────────────────────────────────────
+// Trust rule (docs/PRODUCT_STRATEGY_BETA.md): no invented numbers, no internal
+// implementation names, no promises about features that aren't live yet.
 const features: { icon: LucideIcon; title: string; desc: string }[] = [
-  { icon: Briefcase, title: "500+ Jobs Daily", desc: "Aggregated from LinkedIn, Indeed, Greenhouse, Adzuna & more — automatically." },
-  { icon: Sparkles, title: "AI Resume Optimizer", desc: "Gemini AI tailors your resume for each job with ATS keywords. Never generic." },
-  { icon: Mail, title: "Morning Digest", desc: "Wake up to your top matches with ready-to-send resumes & cover letters." },
-  { icon: Target, title: "Smart Matching", desc: "Vector AI ranks jobs by how well they match your profile — no wasted time." },
+  { icon: Briefcase, title: "Fresh Jobs Daily", desc: "New openings collected from multiple job boards every day — automatically." },
+  { icon: Sparkles, title: "AI Resume Tailoring", desc: "Your resume, rewritten for each job with ATS keywords. Never invented, never generic." },
+  { icon: Mail, title: "Morning Briefing", desc: "Start each day with your top matches, ranked and ready on your dashboard." },
+  { icon: Target, title: "Smart Matching", desc: "AI ranks every job by how well it fits your profile — no wasted time." },
 ];
 
 const steps = [
-  { num: "01", title: "Set Up Your Profile", desc: "Tell us your target role, experience, and paste your resume. Takes 3 minutes." },
-  { num: "02", title: "We Collect Jobs", desc: "Every night our AI scans 5+ job boards so you don't have to." },
-  { num: "03", title: "AI Matches & Optimizes", desc: "Your top matches get a fully tailored resume and cover letter." },
-  { num: "04", title: "Apply in Minutes", desc: "Open your 7 AM email, pick a job, click apply. Done." },
+  { num: "01", title: "Set Up Your Profile", desc: "Bring your resume or start from scratch. Takes 3 minutes." },
+  { num: "02", title: "We Collect Jobs", desc: "We scan multiple job boards every day so you don't have to." },
+  { num: "03", title: "AI Matches & Tailors", desc: "Your top matches are ranked, each with a resume tailored to the role." },
+  { num: "04", title: "Apply in Minutes", desc: "Open your morning briefing, pick a job, click apply. Done." },
 ];
 
 export default function Home() {
@@ -38,7 +40,7 @@ export default function Home() {
           style={{ background: "#FEF3C7", border: "1px solid #FDE68A", color: "#B45309" }}
         >
           <span className="w-2 h-2 rounded-full inline-block" style={{ background: "var(--primary)" }} />
-          Beta — 5 spots remaining
+          Free Beta — now open
         </div>
 
         <h1 className="text-5xl md:text-7xl font-extrabold leading-tight mb-6" style={{ color: "var(--text)" }}>
@@ -46,8 +48,8 @@ export default function Home() {
         </h1>
 
         <p className="text-lg md:text-xl mb-12 mx-auto" style={{ color: "var(--text-muted)", maxWidth: 600 }}>
-          {BRAND_NAME} finds the best jobs for you, optimizes your resume with AI, and delivers everything
-          to your inbox by 7 AM. Apply in under 10 minutes.
+          {BRAND_NAME} finds the best jobs for you, tailors your resume with AI, and has everything
+          ready on your dashboard each morning. Apply in under 10 minutes.
         </p>
 
         <HeroCtas />
@@ -102,7 +104,7 @@ export default function Home() {
           Stop scrolling job boards.<br />
           <span className="text-gradient">Start getting hired.</span>
         </h2>
-        <p className="mb-8" style={{ color: "var(--text-muted)" }}>Free during beta. Join 5 early users.</p>
+        <p className="mb-8" style={{ color: "var(--text-muted)" }}>Free during beta. No credit card required.</p>
         <a
           href="/signup"
           className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-md font-semibold text-white text-lg transition hover:opacity-90"

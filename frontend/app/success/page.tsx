@@ -2,14 +2,16 @@
 
 import { Suspense, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
-import { CheckCircle2, Target, FileText, MousePointerClick, Mail, ArrowRight } from "lucide-react";
+import { CheckCircle2, Target, FileText, MousePointerClick, LayoutDashboard, ArrowRight } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { saveStoredProfile } from "@/lib/localProfile";
 
-// Sell the outcome, not the implementation. No pipeline internals, no invented numbers.
+// Sell the outcome, not the implementation. No pipeline internals, no invented
+// numbers, no promises about features that aren't live (trust rule in
+// docs/PRODUCT_STRATEGY_BETA.md).
 const OUTCOMES: { icon: LucideIcon; text: string }[] = [
   { icon: Target, text: "Curated job matches picked for your profile" },
-  { icon: FileText, text: "ATS-optimized resumes, tailored per role" },
+  { icon: FileText, text: "ATS-tailored resumes for your top matches — rolling out during beta" },
   { icon: MousePointerClick, text: "One-click, apply-ready links" },
 ];
 
@@ -42,7 +44,7 @@ function SuccessContent() {
 
         <div className="rounded-lg p-8 text-left" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-e1)" }}>
           <h2 className="font-semibold text-lg mb-5" style={{ color: "var(--text)" }}>
-            Starting tomorrow morning, your Copilot delivers:
+            Your Copilot is already working on:
           </h2>
           <div className="space-y-4">
             {OUTCOMES.map((o) => (
@@ -55,15 +57,15 @@ function SuccessContent() {
             ))}
           </div>
           <div className="mt-6 pt-5 flex items-center gap-2" style={{ borderTop: "1px solid var(--border)" }}>
-            <Mail size={18} strokeWidth={1.75} style={{ color: "var(--text-muted)" }} />
-            <span className="text-sm font-medium" style={{ color: "var(--text)" }}>In your inbox by 7:00 AM.</span>
+            <LayoutDashboard size={18} strokeWidth={1.75} style={{ color: "var(--text-muted)" }} />
+            <span className="text-sm font-medium" style={{ color: "var(--text)" }}>Fresh matches on your dashboard every morning.</span>
           </div>
         </div>
 
         {id && (
           <div className="rounded-lg p-6 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-e1)" }}>
             <p className="text-sm mb-4" style={{ color: "var(--text-muted)" }}>
-              Your dashboard is ready — track applications, download resumes, and monitor your progress.
+              Your first matches are being prepared right now — they usually appear within a few minutes.
             </p>
             <a
               href={`/dashboard?user_id=${id}`}

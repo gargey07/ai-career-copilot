@@ -7,7 +7,7 @@ const inter = Inter({ subsets: ["latin"] });
 export const metadata: Metadata = {
   title: "AI Career Copilot — Wake up to tailored jobs every morning",
   description:
-    "AI Career Copilot automatically discovers relevant jobs, optimizes your resume with AI, and delivers a personalized morning digest—so you can apply in under 10 minutes.",
+    "AI Career Copilot automatically discovers relevant jobs, tailors your resume with AI, and has your best matches ready every morning—so you can apply in under 10 minutes.",
   keywords: ["job search", "AI resume", "career automation", "ATS optimization"],
 };
 

@@ -334,7 +334,7 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
           </>
         ) : (
           <>
-            Confirm &amp; Get My First Digest
+            Confirm &amp; Find My Matches
             <ArrowRight size={18} strokeWidth={2} />
           </>
         )}

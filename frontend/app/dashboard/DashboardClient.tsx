@@ -7,6 +7,7 @@ import {
   Briefcase,
   Target,
   FileText,
+  Sparkles,
   Download,
   ExternalLink,
   AlertTriangle,
@@ -42,6 +43,7 @@ interface User {
   name: string;
   email: string;
   target_roles: string[];
+  profile_strength?: number;
 }
 
 // ── Score badge (CSS dot, no emoji) ─────────────────────────────────────────────
@@ -264,11 +266,27 @@ function DashboardContent() {
           </p>
         </div>
 
-        {/* Stat cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6 animate-fade-in">
+        {/* Stat cards — all real, verifiable numbers */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6 animate-fade-in">
           <StatCard icon={Briefcase} label="Jobs Found" value={jobsFound} />
           <StatCard icon={FileText} label="Resumes Ready" value={resumesReady} />
           <StatCard icon={Target} label="Best Match" value={`${bestMatch}%`} />
+          <Card className="p-5">
+            <div className="flex items-center gap-2 mb-2">
+              <Sparkles size={18} strokeWidth={1.75} style={{ color: "var(--primary)" }} />
+              <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Profile Strength</span>
+            </div>
+            <div className="flex items-baseline justify-between gap-2">
+              <div className="text-2xl font-extrabold" style={{ color: "var(--text)" }}>
+                {user.profile_strength ?? 0}%
+              </div>
+              {(user.profile_strength ?? 0) < 100 && (
+                <a href="/signup" className="text-xs font-medium hover:underline" style={{ color: "var(--primary)" }}>
+                  Improve
+                </a>
+              )}
+            </div>
+          </Card>
         </div>
 
         {/* Pipeline status — only real, verifiable info (see product strategy:

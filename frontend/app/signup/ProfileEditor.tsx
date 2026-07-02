@@ -31,6 +31,8 @@ import { emptyEducation } from "@/lib/profile";
 import ExperienceSection from "@/components/ExperienceSection";
 import SearchSelect from "@/components/SearchSelect";
 import TemplatePicker from "@/components/TemplatePicker";
+import ProfileStrength, { RecommendedChip } from "@/components/ProfileStrength";
+import { computeProfileStrength } from "@/lib/profileStrength";
 import { SectionCard } from "@/components/ui/Card";
 import { Field, Input, Textarea } from "@/components/ui/Field";
 import { MonthYearField } from "@/components/ui/MonthYearField";
@@ -114,11 +116,16 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
     }
   };
 
+  const strength = computeProfileStrength(profile, !!resumeFilePath);
+
   return (
     <div className="space-y-6">
       <p className="text-center" style={{ color: "var(--text-muted)" }}>
         Here&apos;s what we found in your resume. Double-check everything looks right, then confirm.
       </p>
+
+      {/* Live strength meter — updates as sections are filled in. */}
+      <ProfileStrength strength={strength} />
 
       {/* Basic Info */}
       <SectionCard icon={User} title="Basic Info">
@@ -139,19 +146,19 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
       </SectionCard>
 
       {/* Summary */}
-      <SectionCard icon={FileText} title="Summary">
+      <SectionCard icon={FileText} title="Summary" action={<RecommendedChip />}>
         <Field label="Professional summary" error={flag("summary") ? "We're not fully confident in this — worth a quick edit." : undefined}>
           <Textarea value={profile.summary} onChange={(e) => update("summary", e.target.value)} rows={6} placeholder="A short professional summary…" />
         </Field>
       </SectionCard>
 
       {/* Work Experience */}
-      <SectionCard icon={Briefcase} title="Work Experience">
+      <SectionCard icon={Briefcase} title="Work Experience" action={<RecommendedChip />}>
         <ExperienceSection entries={profile.work_experience} onChange={(v) => update("work_experience", v)} />
       </SectionCard>
 
       {/* Education */}
-      <SectionCard icon={GraduationCap} title="Education">
+      <SectionCard icon={GraduationCap} title="Education" action={<RecommendedChip />}>
         <div className="space-y-4">
           {profile.education.map((edu, i) => (
             <div key={i} className="rounded-md p-5 space-y-4" style={{ background: "var(--surface-muted)", border: "1px solid var(--border)" }}>
@@ -275,7 +282,7 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
       </SectionCard>
 
       {/* Roles / Skills / Tools / Locations */}
-      <SectionCard icon={Target} title="Roles, Skills & Tools">
+      <SectionCard icon={Target} title="Roles, Skills & Tools" action={<RecommendedChip />}>
         <div className="space-y-6">
           <SearchSelect label="Target roles" values={profile.target_roles} onChange={(v) => update("target_roles", v)} apiField="roles" helperText="Search any job title — not limited to the categories above." />
           <SearchSelect label="Tools" values={profile.tools} onChange={(v) => update("tools", v)} apiField="tools" helperText='Our AI expands these — e.g. "Figma" → Prototyping, Dev Handoff.' />
@@ -296,7 +303,7 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
       </SectionCard>
 
       {/* Links */}
-      <SectionCard icon={LinkIcon} title="Links">
+      <SectionCard icon={LinkIcon} title="Links" action={<RecommendedChip />}>
         <div className="space-y-4">
           <Field label="LinkedIn">
             <div className="relative">

@@ -1,0 +1,27 @@
+# Render's free tier spins the backend down after ~15 minutes of no traffic,
+# and the next visitor then eats a ~50-second cold start. This pings /health
+# every 10 minutes so the service (usually) stays warm during the day.
+#
+# Notes:
+# - GitHub schedules only run on the default branch (main) and aren't
+#   guaranteed to fire exactly on time — that's fine, this is best-effort.
+# - Render free instances get 750 running hours/month; one always-warm
+#   service (~720h) fits inside that.
+name: Keep backend warm
+
+on:
+  schedule:
+    - cron: "*/10 * * * *" # every 10 minutes
+  workflow_dispatch: {} # manual "warm it up now" button in the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping /health
+        run: |
+          # --max-time 90 tolerates a cold start; never fail the workflow —
+          # a missed ping just means the next one wakes the service.
+          curl --silent --show-error --max-time 90 \
+            https://ai-career-copilot-api-nyaa.onrender.com/health || true

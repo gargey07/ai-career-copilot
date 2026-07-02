@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>{{ user_name }} — Resume</title>
+  <style>
+    /* Minimal — clean single-column layout with a thin brand-amber accent.
+       Tighter spacing fits more on one page; feels like a modern startup
+       resume. */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 9.5pt;
+      color: #0F2F3A;
+      background: #fff;
+      line-height: 1.45;
+      padding: 34px 44px;
+    }
+
+    /* ── Header ────────────────────────────────────────── */
+    .header {
+      border-left: 4px solid #F59E0B;
+      padding-left: 16px;
+      margin-bottom: 22px;
+    }
+    .header-name {
+      font-size: 22pt;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+    }
+    .header-role {
+      font-size: 10pt;
+      font-weight: 500;
+      color: #B45309;
+      margin-top: 2px;
+    }
+    .header-meta {
+      margin-top: 6px;
+      font-size: 8.5pt;
+      color: #64748B;
+    }
+    .header-meta span + span::before {
+      content: '  \00B7  ';
+      color: #CBD5E1;
+    }
+    .tailored {
+      margin-top: 5px;
+      display: inline-block;
+      font-size: 7.5pt;
+      font-weight: 600;
+      color: #B45309;
+      background: #FEF3C7;
+      border-radius: 4px;
+      padding: 2px 8px;
+    }
+
+    /* ── Section ────────────────────────────────────────── */
+    .section { margin-bottom: 16px; }
+    .section-title {
+      font-size: 7.5pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 2.5px;
+      color: #F59E0B;
+      margin-bottom: 8px;
+    }
+
+    .summary-text { font-size: 9.5pt; line-height: 1.55; color: #334155; }
+
+    /* ── Experience ─────────────────────────────────────── */
+    .exp-block { margin-bottom: 11px; }
+    .exp-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 1px;
+    }
+    .exp-title { font-size: 10.5pt; font-weight: 700; }
+    .exp-dates { font-size: 8pt; color: #94A3B8; white-space: nowrap; margin-left: 12px; }
+    .exp-company { font-size: 9pt; color: #64748B; font-weight: 500; margin-bottom: 4px; }
+    .exp-bullets { list-style: none; padding: 0; }
+    .exp-bullets li {
+      padding-left: 12px;
+      position: relative;
+      font-size: 9pt;
+      margin-bottom: 2px;
+      line-height: 1.45;
+      color: #334155;
+    }
+    .exp-bullets li::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 6px;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: #F59E0B;
+    }
+
+    /* ── Skills ─────────────────────────────────────────── */
+    .skill-row { display: flex; gap: 6px; font-size: 9pt; margin-bottom: 3px; line-height: 1.45; }
+    .skill-label { font-weight: 600; color: #0F2F3A; min-width: 80px; flex-shrink: 0; }
+    .skill-value { color: #334155; }
+
+    /* ── Education ──────────────────────────────────────── */
+    .edu-block { margin-bottom: 6px; }
+    .edu-degree { font-weight: 700; font-size: 9.5pt; }
+    .edu-school { font-size: 9pt; color: #64748B; }
+    .edu-year { font-size: 8pt; color: #94A3B8; }
+
+    .raw-section { font-size: 9pt; color: #334155; line-height: 1.55; white-space: pre-wrap; }
+
+    .footer {
+      margin-top: 14px;
+      padding-top: 8px;
+      border-top: 1px solid #E5E7EB;
+      font-size: 7pt;
+      color: #CBD5E1;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="header-name">{{ user_name }}</div>
+    <div class="header-role">{{ target_role or "Professional" }}</div>
+    <div class="header-meta">
+      {% if user_email %}<span>{{ user_email }}</span>{% endif %}
+      {% if user_location %}<span>{{ user_location }}</span>{% endif %}
+    </div>
+    {% if job_title %}
+    <div class="tailored">Tailored for {{ job_title }}{% if company %} &middot; {{ company }}{% endif %}</div>
+    {% endif %}
+  </div>
+
+  {% if summary %}
+  <div class="section">
+    <div class="section-title">Summary</div>
+    <div class="summary-text">{{ summary }}</div>
+  </div>
+  {% endif %}
+
+  {% if experience_blocks %}
+  <div class="section">
+    <div class="section-title">Experience</div>
+    {% for block in experience_blocks %}
+    <div class="exp-block">
+      <div class="exp-header">
+        <div class="exp-title">{{ block.title }}</div>
+        <div class="exp-dates">{{ block.dates }}</div>
+      </div>
+      {% if block.company %}<div class="exp-company">{{ block.company }}</div>{% endif %}
+      {% if block.bullets %}
+      <ul class="exp-bullets">
+        {% for bullet in block.bullets %}
+        <li>{{ bullet }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% elif experience_raw %}
+  <div class="section">
+    <div class="section-title">Experience</div>
+    <div class="raw-section">{{ experience_raw }}</div>
+  </div>
+  {% endif %}
+
+  {% if skills_parsed %}
+  <div class="section">
+    <div class="section-title">Skills</div>
+    {% for row in skills_parsed %}
+    <div class="skill-row">
+      {% if row.label %}<span class="skill-label">{{ row.label }}:</span>{% endif %}
+      <span class="skill-value">{{ row.value }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% elif skills_raw %}
+  <div class="section">
+    <div class="section-title">Skills</div>
+    <div class="raw-section">{{ skills_raw }}</div>
+  </div>
+  {% endif %}
+
+  {% if education_blocks %}
+  <div class="section">
+    <div class="section-title">Education</div>
+    {% for edu in education_blocks %}
+    <div class="edu-block">
+      <div class="edu-degree">{{ edu.degree }}</div>
+      <div class="edu-school">{{ edu.school }} {% if edu.year %}<span class="edu-year">&middot; {{ edu.year }}</span>{% endif %}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% elif education_raw %}
+  <div class="section">
+    <div class="section-title">Education</div>
+    <div class="raw-section">{{ education_raw }}</div>
+  </div>
+  {% endif %}
+
+  <div class="footer">
+    Generated by AI Career Copilot &middot; {{ today }}
+  </div>
+
+</body>
+</html>

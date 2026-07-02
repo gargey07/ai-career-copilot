@@ -311,7 +311,7 @@ async def generate_pdf_for_match(user_job_id: str) -> Optional[str]:
     # Fetch user
     user_resp = (
         supabase.table("users")
-        .select("name, email, preferred_locations")
+        .select("name, email, preferred_locations, resume_template")
         .eq("id", match["user_id"])
         .single()
         .execute()
@@ -319,6 +319,12 @@ async def generate_pdf_for_match(user_job_id: str) -> Optional[str]:
     user = user_resp.data or {}
     locations = user.get("preferred_locations") or []
     user_location = locations[0] if locations else ""
+
+    # User-chosen resume design (modern | classic | minimal). Guard against
+    # bad/legacy values — a missing template must not kill PDF generation.
+    template_name = user.get("resume_template") or "modern"
+    if not (TEMPLATES_DIR / f"resume_{template_name}.html").exists():
+        template_name = "modern"
 
     # Fetch job
     job_resp = (
@@ -339,6 +345,7 @@ async def generate_pdf_for_match(user_job_id: str) -> Optional[str]:
         job_title=job.get("title", ""),
         company=job.get("company", ""),
         resume_text=match["optimized_resume_text"],
+        template_name=template_name,
         user_location=user_location,
     )
 

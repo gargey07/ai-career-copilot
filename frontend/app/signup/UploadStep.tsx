@@ -31,33 +31,8 @@ export default function UploadStep({ onReady }: UploadStepProps) {
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
   const [dragOver, setDragOver] = useState(false);
-  const [testResult, setTestResult] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const testConnection = async () => {
-    setTestResult("Testing GET…");
-    try {
-      const res = await fetch(`${API_URL}/health`);
-      const text = await res.text();
-      setTestResult(`GET: ${res.status} ${res.ok ? "OK" : ""} — ${text}`);
-    } catch (e: any) {
-      setTestResult(`GET FAILED: ${e.message || e}`);
-      return;
-    }
-    setTestResult((prev) => prev + " | Testing POST…");
-    try {
-      const res = await fetch(`${API_URL}/api/resumes/confirm`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      const text = await res.text();
-      setTestResult((prev) => prev.replace(" | Testing POST…", "") + ` | POST: ${res.status} — ${text.slice(0, 150)}`);
-    } catch (e: any) {
-      setTestResult((prev) => prev.replace(" | Testing POST…", "") + ` | POST FAILED: ${e.message || e}`);
-    }
-  };
 
   const stopPolling = () => {
     if (pollTimer.current) clearTimeout(pollTimer.current);
@@ -269,15 +244,6 @@ export default function UploadStep({ onReady }: UploadStepProps) {
           </span>
         </div>
       )}
-
-      {/* Temporary debug tools — remove once uploads are confirmed stable in prod. */}
-      <div className="mt-6 pt-4 border-t space-y-2" style={{ borderColor: "var(--border)" }}>
-        <button type="button" onClick={testConnection} className="text-xs underline transition hover:opacity-70" style={{ color: "var(--text-muted)" }}>
-          Test backend connection
-        </button>
-        <p className="text-xs break-all" style={{ color: "#94A3B8" }}>API_URL: {API_URL}</p>
-        {testResult && <p className="text-xs break-all" style={{ color: "var(--text-muted)" }}>Result: {testResult}</p>}
-      </div>
     </SectionCard>
   );
 }

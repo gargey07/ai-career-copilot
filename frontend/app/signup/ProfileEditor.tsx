@@ -30,6 +30,7 @@ import type { Profile } from "@/lib/profile";
 import { emptyEducation } from "@/lib/profile";
 import ExperienceSection from "@/components/ExperienceSection";
 import SearchSelect from "@/components/SearchSelect";
+import TemplatePicker from "@/components/TemplatePicker";
 import { SectionCard } from "@/components/ui/Card";
 import { Field, Input, Textarea } from "@/components/ui/Field";
 import { MonthYearField } from "@/components/ui/MonthYearField";
@@ -281,6 +282,17 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
           <SearchSelect label="Skills" values={profile.skills} onChange={(v) => update("skills", v)} apiField="skills" />
           <SearchSelect label="Preferred locations" values={profile.preferred_locations} onChange={(v) => update("preferred_locations", v)} staticOptions={LOCATIONS} helperText="Not in the list? Type it and hit Enter." />
         </div>
+      </SectionCard>
+
+      {/* Resume style */}
+      <SectionCard icon={FileText} title="Resume style">
+        <p className="text-sm -mt-3 mb-4" style={{ color: "var(--text-muted)" }}>
+          Pick how your tailored resumes will look. You can change this anytime.
+        </p>
+        <TemplatePicker
+          value={profile.resume_template || "modern"}
+          onChange={(v) => update("resume_template", v)}
+        />
       </SectionCard>
 
       {/* Links */}

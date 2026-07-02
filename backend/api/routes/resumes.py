@@ -36,6 +36,7 @@ settings = get_settings()
 router = APIRouter()
 
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5MB
+RESUME_TEMPLATES = {"modern", "classic", "minimal"}  # backend/templates/resume_<name>.html
 _CONTENT_TYPES = {
     "pdf": "application/pdf",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -95,6 +96,7 @@ class ConfirmProfileRequest(BaseModel):
     preferred_locations: list[str] = Field(default_factory=list)
     work_type: list[str] = Field(default_factory=list)
     resume_file_path: Optional[str] = None  # set if this profile came from an uploaded resume
+    resume_template: str = "modern"  # which PDF design their tailored resumes use
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -300,13 +302,26 @@ async def confirm_profile(payload: ConfirmProfileRequest):
         "confidence_flags": payload.confidence_flags,
         "resume_text": resume_text,
         "resume_file_path": payload.resume_file_path,
+        # Unknown/blank template names silently fall back to the default —
+        # a bad value here must never block someone from saving a profile.
+        "resume_template": payload.resume_template if payload.resume_template in RESUME_TEMPLATES else "modern",
         "linkedin_url": payload.links.linkedin or None,
         "portfolio_url": payload.links.portfolio or None,
         "github_url": payload.links.github or None,
         "is_active": True,
     }
 
-    resp = supabase.table("users").upsert(row, on_conflict="email").execute()
+    try:
+        resp = supabase.table("users").upsert(row, on_conflict="email").execute()
+    except Exception as e:
+        # resume_template is a newer column — if this database hasn't run the
+        # migration yet, save everything else rather than failing the signup.
+        if "resume_template" in str(e):
+            logger.warning("users.resume_template column missing — run the migration in database/schema.sql")
+            row.pop("resume_template", None)
+            resp = supabase.table("users").upsert(row, on_conflict="email").execute()
+        else:
+            raise
     if not resp.data:
         raise HTTPException(500, "Failed to save profile.")
 

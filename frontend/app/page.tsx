@@ -1,5 +1,8 @@
 import { Briefcase, Sparkles, Mail, Target, ArrowRight } from "lucide-react";
 import { BrandMark } from "@/components/BrandMark";
+import { NavCta } from "@/components/NavCta";
+import { HeroCtas } from "@/components/HeroCtas";
+import { WarmBackend } from "@/components/WarmBackend";
 import { BRAND_NAME } from "@/lib/brand";
 import type { LucideIcon } from "lucide-react";
 
@@ -22,16 +25,10 @@ export default function Home() {
   return (
     <main className="min-h-screen" style={{ background: "var(--bg)", color: "var(--text)" }}>
       {/* ── Nav ── */}
+      <WarmBackend />
       <nav className="flex items-center justify-between px-6 py-5 max-w-6xl mx-auto">
         <BrandMark />
-        <a
-          href="/signup"
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-semibold text-white transition hover:opacity-90"
-          style={{ background: "var(--primary)" }}
-        >
-          Join Free Beta
-          <ArrowRight size={16} strokeWidth={2} />
-        </a>
+        <NavCta />
       </nav>
 
       {/* ── Hero ── */}
@@ -53,24 +50,7 @@ export default function Home() {
           to your inbox by 7 AM. Apply in under 10 minutes.
         </p>
 
-        <div className="flex flex-col sm:flex-row gap-4 justify-center">
-          <a
-            href="/signup"
-            className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-md font-bold text-white text-lg transition hover:opacity-90"
-            style={{ background: "var(--primary)", boxShadow: "var(--shadow-e1)" }}
-          >
-            Join Free Beta — It&apos;s Free
-            <ArrowRight size={18} strokeWidth={2} />
-          </a>
-          <a
-            href="/dashboard?user_id=37c115cf-3cd5-4e06-be08-d9c60a1e489c"
-            className="inline-flex items-center justify-center px-8 py-4 rounded-md font-semibold text-lg transition hover:bg-[var(--surface-muted)]"
-            style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)" }}
-          >
-            View Demo Dashboard
-          </a>
-        </div>
-        <p className="text-sm mt-4" style={{ color: "var(--text-muted)" }}>Free during beta. No credit card required.</p>
+        <HeroCtas />
       </section>
 
       {/* ── Features ── */}

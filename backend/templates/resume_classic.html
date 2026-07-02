@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>{{ user_name }} — Resume</title>
+  <style>
+    /* Classic — the traditional serif resume recruiters have read for
+       decades. Black on white, centered header, thin rules. The safest
+       choice for conservative industries and strict ATS parsers. */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: 10.5pt;
+      color: #111111;
+      background: #fff;
+      line-height: 1.5;
+      padding: 36px 48px;
+    }
+
+    /* ── Header ────────────────────────────────────────── */
+    .header {
+      text-align: center;
+      padding-bottom: 14px;
+      border-bottom: 2px solid #111;
+      margin-bottom: 20px;
+    }
+    .header-name {
+      font-size: 24pt;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    .header-role {
+      font-size: 10.5pt;
+      font-style: italic;
+      color: #444;
+      margin-top: 3px;
+    }
+    .header-meta {
+      margin-top: 8px;
+      font-size: 9pt;
+      color: #333;
+    }
+    .header-meta span + span::before {
+      content: '  \2022  ';
+      color: #999;
+    }
+    .tailored {
+      margin-top: 6px;
+      font-size: 8.5pt;
+      color: #666;
+      font-style: italic;
+    }
+
+    /* ── Section ────────────────────────────────────────── */
+    .section { margin-bottom: 18px; }
+    .section-title {
+      font-size: 11pt;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      border-bottom: 1px solid #999;
+      padding-bottom: 3px;
+      margin-bottom: 10px;
+    }
+
+    .summary-text { font-size: 10pt; line-height: 1.6; color: #222; }
+
+    /* ── Experience ─────────────────────────────────────── */
+    .exp-block { margin-bottom: 12px; }
+    .exp-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    .exp-title { font-size: 11pt; font-weight: 700; }
+    .exp-dates { font-size: 9pt; color: #555; white-space: nowrap; margin-left: 12px; font-style: italic; }
+    .exp-company { font-size: 10pt; font-style: italic; color: #333; margin-bottom: 5px; }
+    .exp-bullets { list-style: none; padding: 0; }
+    .exp-bullets li {
+      padding-left: 14px;
+      position: relative;
+      font-size: 9.5pt;
+      margin-bottom: 3px;
+      line-height: 1.5;
+      color: #222;
+    }
+    .exp-bullets li::before { content: '\2022'; position: absolute; left: 2px; color: #111; }
+
+    /* ── Skills ─────────────────────────────────────────── */
+    .skill-row { display: flex; gap: 6px; font-size: 9.5pt; margin-bottom: 4px; line-height: 1.5; }
+    .skill-label { font-weight: 700; min-width: 90px; flex-shrink: 0; }
+    .skill-value { color: #222; }
+
+    /* ── Education ──────────────────────────────────────── */
+    .edu-block { margin-bottom: 7px; }
+    .edu-degree { font-weight: 700; font-size: 10.5pt; }
+    .edu-school { font-size: 9.5pt; font-style: italic; color: #333; }
+    .edu-year { font-size: 9pt; color: #555; }
+
+    .raw-section { font-size: 9.5pt; color: #222; line-height: 1.6; white-space: pre-wrap; }
+
+    .footer {
+      margin-top: 16px;
+      padding-top: 8px;
+      border-top: 1px solid #ddd;
+      font-size: 7.5pt;
+      color: #999;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="header-name">{{ user_name }}</div>
+    <div class="header-role">{{ target_role or "Professional" }}</div>
+    <div class="header-meta">
+      {% if user_email %}<span>{{ user_email }}</span>{% endif %}
+      {% if user_location %}<span>{{ user_location }}</span>{% endif %}
+    </div>
+    {% if job_title %}
+    <div class="tailored">Tailored for {{ job_title }}{% if company %} at {{ company }}{% endif %}</div>
+    {% endif %}
+  </div>
+
+  {% if summary %}
+  <div class="section">
+    <div class="section-title">Professional Summary</div>
+    <div class="summary-text">{{ summary }}</div>
+  </div>
+  {% endif %}
+
+  {% if experience_blocks %}
+  <div class="section">
+    <div class="section-title">Professional Experience</div>
+    {% for block in experience_blocks %}
+    <div class="exp-block">
+      <div class="exp-header">
+        <div class="exp-title">{{ block.title }}</div>
+        <div class="exp-dates">{{ block.dates }}</div>
+      </div>
+      {% if block.company %}<div class="exp-company">{{ block.company }}</div>{% endif %}
+      {% if block.bullets %}
+      <ul class="exp-bullets">
+        {% for bullet in block.bullets %}
+        <li>{{ bullet }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% elif experience_raw %}
+  <div class="section">
+    <div class="section-title">Professional Experience</div>
+    <div class="raw-section">{{ experience_raw }}</div>
+  </div>
+  {% endif %}
+
+  {% if skills_parsed %}
+  <div class="section">
+    <div class="section-title">Skills</div>
+    {% for row in skills_parsed %}
+    <div class="skill-row">
+      {% if row.label %}<span class="skill-label">{{ row.label }}:</span>{% endif %}
+      <span class="skill-value">{{ row.value }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% elif skills_raw %}
+  <div class="section">
+    <div class="section-title">Skills</div>
+    <div class="raw-section">{{ skills_raw }}</div>
+  </div>
+  {% endif %}
+
+  {% if education_blocks %}
+  <div class="section">
+    <div class="section-title">Education</div>
+    {% for edu in education_blocks %}
+    <div class="edu-block">
+      <div class="edu-degree">{{ edu.degree }}</div>
+      <div class="edu-school">{{ edu.school }} {% if edu.year %}<span class="edu-year">&middot; {{ edu.year }}</span>{% endif %}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% elif education_raw %}
+  <div class="section">
+    <div class="section-title">Education</div>
+    <div class="raw-section">{{ education_raw }}</div>
+  </div>
+  {% endif %}
+
+  <div class="footer">
+    Generated by AI Career Copilot &middot; {{ today }}
+  </div>
+
+</body>
+</html>

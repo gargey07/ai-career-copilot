@@ -17,6 +17,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
+import { getStoredProfile } from "@/lib/localProfile";
 import { BrandMark } from "@/components/BrandMark";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -155,7 +156,7 @@ function DashboardSkeleton() {
 // ── Dashboard Content ──────────────────────────────────────────────────────────
 function DashboardContent() {
   const params = useSearchParams();
-  const userId = params.get("user_id");
+  const paramUserId = params.get("user_id");
 
   const [user, setUser] = useState<User | null>(null);
   const [allJobs, setAllJobs] = useState<UserJob[]>([]);
@@ -165,7 +166,14 @@ function DashboardContent() {
   const today = new Date().toISOString().split("T")[0];
 
   useEffect(() => {
-    if (!userId) { setError("No user ID in URL. Check your link."); setLoading(false); return; }
+    // No id in the URL? Fall back to the profile this browser confirmed
+    // earlier — lets returning users just visit /dashboard directly.
+    const userId = paramUserId || getStoredProfile()?.id;
+    if (!userId) {
+      setError("We don't know who you are yet — set up your profile first, or open the dashboard link from your email.");
+      setLoading(false);
+      return;
+    }
 
     async function load() {
       try {
@@ -184,7 +192,7 @@ function DashboardContent() {
       }
     }
     load();
-  }, [userId, today]);
+  }, [paramUserId, today]);
 
   if (loading) {
     return (
@@ -202,7 +210,14 @@ function DashboardContent() {
             <AlertTriangle size={24} strokeWidth={1.75} style={{ color: "var(--coral)" }} />
           </div>
           <h2 className="text-xl font-bold mb-2" style={{ color: "var(--text)" }}>Couldn&apos;t load your dashboard</h2>
-          <p className="text-sm" style={{ color: "var(--text-muted)" }}>{error || "Invalid user ID. Check your link."}</p>
+          <p className="text-sm mb-5" style={{ color: "var(--text-muted)" }}>{error || "Invalid user ID. Check your link."}</p>
+          <a
+            href="/signup"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-md text-sm font-semibold text-white transition hover:opacity-90"
+            style={{ background: "var(--primary)" }}
+          >
+            Set up my profile
+          </a>
         </Card>
       </main>
     );

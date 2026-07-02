@@ -1,9 +1,10 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { CheckCircle2, Target, FileText, MousePointerClick, Mail, ArrowRight } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { saveStoredProfile } from "@/lib/localProfile";
 
 // Sell the outcome, not the implementation. No pipeline internals, no invented numbers.
 const OUTCOMES: { icon: LucideIcon; text: string }[] = [
@@ -16,6 +17,12 @@ function SuccessContent() {
   const params = useSearchParams();
   const name = params.get("name") || "Friend";
   const id = params.get("id") || "";
+
+  // Remember this browser's profile so the landing page, signup page, and
+  // logo all route back to the dashboard on the next visit.
+  useEffect(() => {
+    if (id) saveStoredProfile({ id, name });
+  }, [id, name]);
 
   return (
     <main className="min-h-screen flex flex-col items-center justify-center px-6 py-12" style={{ background: "var(--bg)", color: "var(--text)" }}>

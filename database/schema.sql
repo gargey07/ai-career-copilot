@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS users (
                                                      -- data on save so matcher.py / optimizer.py need no changes
   resume_embedding    vector(768),                 -- for matching
   resume_file_path    TEXT,                        -- path in the private "resume-uploads" Storage bucket (not a public URL)
+  resume_template     TEXT DEFAULT 'modern',       -- PDF design: 'modern' | 'classic' | 'minimal' (backend/templates/)
   confidence_flags     JSONB DEFAULT '{}'::jsonb,    -- e.g. {"phone": "missing", "summary": "low_confidence"}
 
   -- Profile links
@@ -295,4 +296,5 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS summary              TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS work_experience      JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS education            JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS resume_file_path    TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS resume_template     TEXT DEFAULT 'modern';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS confidence_flags     JSONB DEFAULT '{}'::jsonb;

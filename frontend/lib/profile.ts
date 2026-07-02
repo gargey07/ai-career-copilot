@@ -46,6 +46,7 @@ export interface Profile {
   experience_level: string;
   preferred_locations: string[];
   work_type: string[];
+  resume_template: string; // 'modern' | 'classic' | 'minimal'
 }
 
 export function emptyProfile(): Profile {
@@ -63,6 +64,7 @@ export function emptyProfile(): Profile {
     experience_level: "junior",
     preferred_locations: [],
     work_type: [],
+    resume_template: "modern",
   };
 }
 

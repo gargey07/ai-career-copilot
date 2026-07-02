@@ -3,314 +3,164 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Your Morning Job Digest</title>
+  <title>Your morning job matches</title>
   <style>
+    /* Design system (docs/design-system.md): light theme, amber primary,
+       no emojis, honest copy — real counts only. Inline-friendly CSS for
+       email clients. */
     * { box-sizing: border-box; margin: 0; padding: 0; }
-
     body {
       font-family: -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
-      background-color: #f0f2f5;
-      color: #1a1a2e;
+      background-color: #F8FAFC;
+      color: #0F2F3A;
       -webkit-font-smoothing: antialiased;
     }
-
     .wrapper { padding: 32px 16px; }
-
     .container {
       max-width: 600px;
       margin: 0 auto;
-      background: #ffffff;
-      border-radius: 16px;
-      overflow: hidden;
-      box-shadow: 0 8px 30px rgba(0,0,0,0.08);
-    }
-
-    /* ── Header ── */
-    .header {
-      background: linear-gradient(135deg, #0f0c29 0%, #302b63 60%, #24243e 100%);
-      padding: 36px 30px 32px;
-      text-align: center;
-    }
-    .header-logo {
-      display: inline-block;
-      background: rgba(255,255,255,0.15);
-      border: 1px solid rgba(255,255,255,0.25);
-      border-radius: 10px;
-      padding: 6px 14px;
-      font-size: 12px;
-      font-weight: 700;
-      color: #fff;
-      letter-spacing: 1.5px;
-      text-transform: uppercase;
-      margin-bottom: 16px;
-    }
-    .header h1 {
-      font-size: 26px;
-      font-weight: 700;
-      color: #fff;
-      line-height: 1.3;
-      margin-bottom: 8px;
-    }
-    .header h1 span {
-      background: linear-gradient(90deg, #60a5fa, #a78bfa);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-    .header-date {
-      font-size: 13px;
-      color: rgba(255,255,255,0.65);
-      margin-top: 4px;
-    }
-
-    /* ── Intro ── */
-    .intro {
-      padding: 28px 30px 8px;
-      border-bottom: 1px solid #f0f0f0;
-    }
-    .intro-greeting {
-      font-size: 17px;
-      font-weight: 600;
-      color: #1a1a2e;
-      margin-bottom: 10px;
-    }
-    .intro-text {
-      font-size: 14px;
-      line-height: 1.6;
-      color: #555;
-    }
-    .intro-stats {
-      display: inline-flex;
-      gap: 6px;
-      margin-top: 16px;
-      margin-bottom: 4px;
-    }
-    .stat-chip {
-      background: #f3f0ff;
-      color: #5b21b6;
-      border-radius: 20px;
-      padding: 4px 12px;
-      font-size: 12px;
-      font-weight: 600;
-    }
-
-    /* ── Jobs ── */
-    .jobs-section { padding: 20px 30px 10px; }
-
-    .section-label {
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 1.2px;
-      text-transform: uppercase;
-      color: #999;
-      margin-bottom: 16px;
-    }
-
-    .job-card {
-      background: #fafbfc;
-      border: 1px solid #e8ecf0;
+      background: #FFFFFF;
+      border: 1px solid #E5E7EB;
       border-radius: 12px;
-      padding: 20px;
-      margin-bottom: 16px;
-      position: relative;
-    }
-    .job-card:hover { border-color: #c7b8fa; }
-
-    .job-card-top {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      margin-bottom: 12px;
+      overflow: hidden;
     }
 
-    .job-rank {
-      font-size: 11px;
-      font-weight: 700;
-      color: #aaa;
-      letter-spacing: 0.5px;
-      margin-bottom: 4px;
-    }
-
-    .job-title {
-      font-size: 16px;
-      font-weight: 700;
-      color: #1a1a2e;
-      line-height: 1.3;
-    }
-
-    .job-company {
-      font-size: 13px;
-      color: #666;
-      margin-top: 3px;
-    }
-
-    /* Match Score Badge */
-    .badge {
+    .header { padding: 28px 30px 24px; border-bottom: 1px solid #E5E7EB; }
+    .brand {
       display: inline-block;
-      padding: 4px 10px;
-      border-radius: 20px;
+      background: #FEF3C7;
+      border: 1px solid #FDE68A;
+      border-radius: 8px;
+      padding: 5px 12px;
       font-size: 12px;
       font-weight: 700;
-      white-space: nowrap;
-      flex-shrink: 0;
-      margin-left: 12px;
+      color: #B45309;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 14px;
     }
-    .badge-green  { background: #dcfce7; color: #16a34a; border: 1px solid #bbf7d0; }
-    .badge-yellow { background: #fef9c3; color: #ca8a04; border: 1px solid #fde68a; }
-    .badge-orange { background: #ffedd5; color: #ea580c; border: 1px solid #fed7aa; }
+    .header h1 { font-size: 22px; font-weight: 800; color: #0F2F3A; line-height: 1.3; }
+    .header-date { font-size: 13px; color: #64748B; margin-top: 6px; }
 
-    .job-tags {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-bottom: 16px;
+    .intro { padding: 22px 30px 6px; }
+    .intro-greeting { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+    .intro-text { font-size: 14px; line-height: 1.6; color: #64748B; }
+
+    .jobs-section { padding: 18px 30px 6px; }
+    .section-label {
+      font-size: 11px; font-weight: 700; letter-spacing: 1.2px;
+      text-transform: uppercase; color: #64748B; margin-bottom: 14px;
     }
+    .job-card {
+      background: #F8FAFC;
+      border: 1px solid #E5E7EB;
+      border-radius: 10px;
+      padding: 18px;
+      margin-bottom: 14px;
+    }
+    .job-rank { font-size: 11px; font-weight: 700; color: #94A3B8; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .job-title { font-size: 16px; font-weight: 700; color: #0F2F3A; line-height: 1.3; }
+    .job-company { font-size: 13px; color: #64748B; margin-top: 3px; margin-bottom: 10px; }
+
+    .badge {
+      display: inline-block; padding: 3px 10px; border-radius: 20px;
+      font-size: 12px; font-weight: 700; white-space: nowrap; margin-bottom: 10px;
+    }
+    .badge-green  { background: #ECFDF5; color: #0F9D8C; border: 1px solid #A7F3D0; }
+    .badge-yellow { background: #FEF3C7; color: #B45309; border: 1px solid #FDE68A; }
+    .badge-orange { background: #FFF7ED; color: #C2410C; border: 1px solid #FED7AA; }
     .tag {
-      display: inline-block;
-      background: #f0f2f5;
-      color: #555;
-      border-radius: 4px;
-      padding: 3px 8px;
-      font-size: 11px;
-      font-weight: 500;
+      display: inline-block; background: #F1F5F9; color: #64748B;
+      border-radius: 4px; padding: 3px 8px; font-size: 11px; font-weight: 500;
+      margin-left: 6px; margin-bottom: 10px;
     }
-    .tag-remote { background: #e0f2fe; color: #0369a1; }
-    .tag-source { background: #ede9fe; color: #6d28d9; }
 
-    /* Buttons */
-    .btn-row {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
+    .btn-row { margin-top: 4px; }
     .btn-primary {
-      display: inline-block;
-      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
-      color: #ffffff !important;
-      text-decoration: none;
-      padding: 10px 18px;
-      border-radius: 8px;
-      font-weight: 600;
-      font-size: 13px;
-      flex: 1;
-      text-align: center;
-      min-width: 130px;
+      display: inline-block; background: #F59E0B; color: #FFFFFF !important;
+      text-decoration: none; padding: 10px 18px; border-radius: 8px;
+      font-weight: 600; font-size: 13px; margin-right: 8px; margin-bottom: 6px;
     }
     .btn-secondary {
-      display: inline-block;
-      background: #ffffff;
-      color: #302b63 !important;
-      text-decoration: none;
-      padding: 9px 18px;
-      border: 1.5px solid #302b63;
-      border-radius: 8px;
-      font-weight: 600;
-      font-size: 13px;
-      flex: 1;
-      text-align: center;
-      min-width: 130px;
+      display: inline-block; background: #FFFFFF; color: #0F2F3A !important;
+      text-decoration: none; padding: 9px 18px; border: 1px solid #E5E7EB;
+      border-radius: 8px; font-weight: 600; font-size: 13px; margin-bottom: 6px;
     }
 
-    /* ── Divider ── */
-    .divider { height: 1px; background: #f0f0f0; margin: 4px 30px 20px; }
+    .dashboard-cta { padding: 10px 30px 26px; text-align: center; }
+    .dashboard-cta a {
+      display: inline-block; background: #0F2F3A; color: #FFFFFF !important;
+      text-decoration: none; padding: 11px 22px; border-radius: 8px;
+      font-weight: 600; font-size: 13px;
+    }
 
-    /* ── Footer ── */
-    .footer {
-      background: #f7f8fa;
-      border-top: 1px solid #eaeaea;
-      padding: 24px 30px;
-      text-align: center;
-    }
-    .footer-logo {
-      font-size: 13px;
-      font-weight: 700;
-      color: #302b63;
-      margin-bottom: 6px;
-    }
-    .footer-text {
-      font-size: 11px;
-      color: #aaa;
-      line-height: 1.6;
-    }
-    .footer-text a { color: #6d28d9; text-decoration: none; }
+    .footer { background: #F8FAFC; border-top: 1px solid #E5E7EB; padding: 22px 30px; text-align: center; }
+    .footer-logo { font-size: 13px; font-weight: 700; color: #0F2F3A; margin-bottom: 6px; }
+    .footer-text { font-size: 11px; color: #94A3B8; line-height: 1.7; }
+    .footer-text a { color: #B45309; text-decoration: none; }
   </style>
 </head>
 <body>
 <div class="wrapper">
   <div class="container">
 
-    <!-- Header -->
     <div class="header">
-      <div class="header-logo">AI Career Copilot</div>
-      <h1>Your top job matches are <span>ready</span> ☀️</h1>
+      <div class="brand">AI Career Copilot</div>
+      <h1>Your top {{ jobs|length }} match{{ 'es' if jobs|length != 1 else '' }} today</h1>
       <div class="header-date">{{ today }}</div>
     </div>
 
-    <!-- Intro -->
     <div class="intro">
-      <div class="intro-greeting">Hey {{ user_name }} 👋</div>
+      <div class="intro-greeting">Good morning, {{ user_name }}</div>
       <p class="intro-text">
-        We scanned hundreds of jobs and our AI picked the <strong>{{ jobs|length }} best matches</strong> for your profile.
-        Each one has a tailored resume ready to download — just click and apply.
+        {% if has_resumes %}
+        These jobs match your profile — your top matches include a resume tailored for that exact role. Pick one and apply.
+        {% else %}
+        These jobs match your profile. Pick one and apply — tailored resumes are on the way.
+        {% endif %}
       </p>
-      <div class="intro-stats">
-        <span class="stat-chip">{{ jobs|length }} matches found</span>
-        <span class="stat-chip">AI resumes ready</span>
-      </div>
     </div>
 
-    <!-- Jobs -->
     <div class="jobs-section">
-      <div class="section-label">Today's Top Matches</div>
+      <div class="section-label">Today's matches</div>
 
       {% for job in jobs %}
       {% set score = (job.match_score * 100)|round|int %}
       <div class="job-card">
-        <div class="job-card-top">
-          <div>
-            <div class="job-rank">#{{ loop.index }} MATCH</div>
-            <div class="job-title">{{ job.title }}</div>
-            <div class="job-company">{{ job.company }}{% if job.location %} &nbsp;·&nbsp; {{ job.location }}{% endif %}</div>
-          </div>
-          {% if score >= 80 %}
-            <span class="badge badge-green">{{ score }}% match</span>
-          {% elif score >= 60 %}
-            <span class="badge badge-yellow">{{ score }}% match</span>
-          {% else %}
-            <span class="badge badge-orange">{{ score }}% match</span>
-          {% endif %}
-        </div>
+        <div class="job-rank">#{{ loop.index }}</div>
+        <div class="job-title">{{ job.title }}</div>
+        <div class="job-company">{{ job.company }}{% if job.location %} &nbsp;·&nbsp; {{ job.location }}{% endif %}</div>
 
-        <div class="job-tags">
-          {% if job.is_remote %}
-            <span class="tag tag-remote">🌍 Remote</span>
-          {% endif %}
-          {% if job.source %}
-            <span class="tag tag-source">{{ job.source|capitalize }}</span>
-          {% endif %}
-          <span class="tag">AI Resume Ready ✓</span>
-        </div>
+        {% if score >= 80 %}<span class="badge badge-green">{{ score }}% match</span>
+        {% elif score >= 60 %}<span class="badge badge-yellow">{{ score }}% match</span>
+        {% else %}<span class="badge badge-orange">{{ score }}% match</span>{% endif %}
+        {% if job.is_remote %}<span class="tag">Remote</span>{% endif %}
 
         <div class="btn-row">
           {% if job.pdf_url %}
-          <a href="{{ job.pdf_url }}" class="btn-primary" target="_blank">📄 View Tailored Resume</a>
+          <a href="{{ job.pdf_url }}" class="btn-primary" target="_blank">View tailored resume</a>
           {% endif %}
           {% if job.apply_url and job.apply_url != '#' %}
-          <a href="{{ job.apply_url }}" class="btn-secondary" target="_blank">🚀 Apply Now</a>
+          <a href="{{ job.apply_url }}" class="btn-secondary" target="_blank">Apply now</a>
           {% endif %}
         </div>
       </div>
       {% endfor %}
     </div>
 
-    <div class="divider"></div>
+    {% if dashboard_url %}
+    <div class="dashboard-cta">
+      <a href="{{ dashboard_url }}" target="_blank">Open your dashboard</a>
+    </div>
+    {% endif %}
 
-    <!-- Footer -->
     <div class="footer">
       <div class="footer-logo">AI Career Copilot</div>
       <p class="footer-text">
         Built by <a href="https://gargey-patel-portfolio.vercel.app">Gargey Patel</a> &nbsp;·&nbsp;
         gargeypatel123@gmail.com<br>
-        You're receiving this because you joined the beta. Apply fast — these roles fill quickly!
+        You're receiving this because you joined the beta.
+        Reply to this email any time to unsubscribe or give feedback.
       </p>
     </div>
 

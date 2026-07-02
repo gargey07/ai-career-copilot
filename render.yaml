@@ -4,7 +4,11 @@ services:
     runtime: python
     plan: free
     rootDir: backend
-    buildCommand: pip install -r requirements.txt
+    # Playwright's Chromium renders resume PDFs. `|| true` keeps deploys
+    # green even if the browser download hiccups — PDF generation then
+    # degrades gracefully (matches ship without PDFs) instead of blocking
+    # the whole API deploy.
+    buildCommand: pip install -r requirements.txt && (python -m playwright install chromium || true)
     startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
@@ -26,6 +30,13 @@ services:
         sync: false
       - key: APP_SECRET_KEY
         generateValue: true
+      # Morning digest email — Gmail app password (Google Account →
+      # Security → 2-Step Verification → App passwords). Optional: without
+      # these the pipeline still runs, just without emails.
+      - key: GMAIL_USER
+        sync: false
+      - key: GMAIL_APP_PASSWORD
+        sync: false
       # See backend/.env.example for the full list of optional integrations
       # (job APIs, email, storage). Add any of those as needed in the
       # Render dashboard — they're not required for the API to boot.

@@ -1,14 +1,18 @@
 """
-Pipeline Runner — fetch + match (Phase 1)
-─────────────────────────────────────────
-The lightweight core of the daily pipeline: pull jobs from the (free)
-sources for each active user's category, embed them if an AI provider is
-available, then match jobs to users (vector, or keyword fallback). This
-populates `user_jobs`, which is what the dashboard reads.
+Pipeline Runner — the full daily chain
+──────────────────────────────────────
+fetch → embed (best-effort) → match → optimize resumes → render PDFs →
+send morning digest. Populates `user_jobs` (the dashboard) and sends the
+daily email.
 
-Deliberately does NOT do resume optimization / PDF / email (those need
-Gemini + Playwright + an email provider). Kept separate from pipeline.py
-so importing it never triggers pipeline.py's file-logging setup.
+Every stage past matching degrades gracefully (see the failure-mode
+contract in docs/AI_CAREER_INTELLIGENCE_ENGINE.md): no Gemini key or
+budget → matches ship without tailored resumes; no Playwright browser →
+matches ship without PDFs; no email provider → dashboard-only. A stage
+failing for one user never blocks the next user.
+
+Kept separate from pipeline.py so importing it never triggers
+pipeline.py's file-logging setup.
 """
 from __future__ import annotations
 import logging
@@ -64,10 +68,41 @@ def _queries_for_category(category: str) -> list[str]:
     return [category] if category else [""]
 
 
+async def _run_delivery_for_user(user_id: str) -> dict:
+    """
+    Phase 3 for one user: tailored resumes → PDFs → digest email.
+    Each step is best-effort; a failure downgrades the output, never
+    aborts the pipeline.
+    """
+    stats = {"resumes": 0, "pdfs": 0, "emailed": False}
+
+    try:
+        from core.optimizer import run_optimizer_for_user
+        stats["resumes"] = await run_optimizer_for_user(user_id)
+    except Exception as e:
+        logger.warning(f"   Optimizer skipped for {user_id}: {e}")
+
+    try:
+        from core.pdf_generator import run_pdf_generator_for_user
+        stats["pdfs"] = await run_pdf_generator_for_user(user_id)
+    except Exception as e:
+        # Most common cause: Playwright's Chromium isn't installed on the
+        # server (render.yaml build installs it; first deploy may lag).
+        logger.warning(f"   PDF generation skipped for {user_id}: {e}")
+
+    try:
+        from core.email_sender import send_morning_digest
+        stats["emailed"] = await send_morning_digest(user_id)
+    except Exception as e:
+        logger.warning(f"   Digest email skipped for {user_id}: {e}")
+
+    return stats
+
+
 async def run_fetch_and_match() -> dict:
-    """Fetch jobs for every active user's category, embed (best-effort), then match."""
+    """The full daily pipeline: fetch → embed → match → optimize → PDF → email."""
     supabase = get_supabase()
-    users = supabase.table("users").select("job_category").eq("is_active", True).execute().data or []
+    users = supabase.table("users").select("id, job_category").eq("is_active", True).execute().data or []
     categories = sorted({(u.get("job_category") or "").strip() or "ui_ux_designer" for u in users})
 
     total_fetched = 0
@@ -81,11 +116,21 @@ async def run_fetch_and_match() -> dict:
     embedded = await _embed_unembedded_jobs()
     match_result = await run_matching_for_all_users()
 
+    resumes = pdfs = emails = 0
+    for user in users:
+        delivery = await _run_delivery_for_user(user["id"])
+        resumes += delivery["resumes"]
+        pdfs += delivery["pdfs"]
+        emails += 1 if delivery["emailed"] else 0
+
     stats = {
         "categories": categories,
         "jobs_fetched": total_fetched,
         "jobs_embedded": embedded,
         **match_result,
+        "resumes_optimized": resumes,
+        "pdfs_generated": pdfs,
+        "digests_emailed": emails,
     }
-    logger.info(f"🏁 Fetch+match complete: {stats}")
+    logger.info(f"🏁 Pipeline complete: {stats}")
     return stats

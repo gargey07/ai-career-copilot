@@ -229,8 +229,13 @@ async def html_to_pdf(html_content: str, output_path: str) -> int:
     """
     TMP_DIR.mkdir(exist_ok=True)
 
+    # Normally Playwright uses its own downloaded Chromium (installed at
+    # build time — see render.yaml). CHROMIUM_EXECUTABLE_PATH overrides it
+    # for hosts where a system Chromium already exists.
+    executable_path = os.environ.get("CHROMIUM_EXECUTABLE_PATH") or None
+
     async with async_playwright() as p:
-        browser = await p.chromium.launch(args=["--no-sandbox"])
+        browser = await p.chromium.launch(args=["--no-sandbox"], executable_path=executable_path)
         page = await browser.new_page()
 
         await page.set_content(html_content, wait_until="domcontentloaded")

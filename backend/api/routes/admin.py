@@ -59,6 +59,7 @@ def _usage_services() -> list[dict]:
         {"service": "jsearch",         "label": "JSearch (RapidAPI)",     "limit": settings.jsearch_daily_limit},
         {"service": "openai",          "label": "OpenAI",                 "limit": settings.openai_daily_limit},
         {"service": "resend",          "label": "Resend email",           "limit": settings.resend_daily_limit},
+        {"service": "gmail",           "label": "Gmail digests",          "limit": settings.gmail_daily_limit},
         {"service": "resume_parse",    "label": "Resume uploads (all users)", "limit": 0},  # per-IP cap, no global cap
     ]
 

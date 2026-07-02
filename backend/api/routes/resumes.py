@@ -127,6 +127,25 @@ def _validate_and_get_extension(content: bytes, claimed_filename: str) -> str:
     return sniffed_ext
 
 
+def _normalize_share_url(url: str) -> str:
+    """
+    Convert common cloud "share" links (which serve an HTML viewer page, not
+    the file) into direct-download URLs so the PDF/DOCX bytes come through.
+    """
+    # Google Drive: /file/d/<id>/... or ?id=<id>  ->  uc?export=download&id=<id>
+    m = re.search(r"drive\.google\.com/file/d/([A-Za-z0-9_-]+)", url)
+    if not m:
+        m = re.search(r"drive\.google\.com/(?:open|uc)\?[^ ]*\bid=([A-Za-z0-9_-]+)", url)
+    if m:
+        return f"https://drive.google.com/uc?export=download&id={m.group(1)}"
+
+    # Dropbox: force direct download
+    if "dropbox.com" in url:
+        return re.sub(r"([?&])dl=0", r"\1dl=1", url) if "dl=" in url else url + ("&dl=1" if "?" in url else "?dl=1")
+
+    return url
+
+
 async def _download_url(url: str, max_bytes: int) -> tuple[bytes, str]:
     """Streams a URL server-side, aborting early past max_bytes. Returns (content, hinted filename)."""
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
@@ -220,8 +239,9 @@ async def upload_resume_from_url(payload: UploadUrlRequest, request: Request, ba
     if not check_budget(f"resume_parse_ip_{client_ip}", settings.resume_parse_daily_limit_per_ip):
         raise HTTPException(429, "Too many resume uploads today. Please try again tomorrow.")
 
+    download_url = _normalize_share_url(payload.url)
     try:
-        content, _hinted_filename = await _download_url(payload.url, MAX_UPLOAD_BYTES)
+        content, _hinted_filename = await _download_url(download_url, MAX_UPLOAD_BYTES)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except httpx.HTTPError as e:
@@ -229,7 +249,12 @@ async def upload_resume_from_url(payload: UploadUrlRequest, request: Request, ba
 
     extension = _sniff_extension(content)
     if extension is None:
-        raise HTTPException(400, "That URL doesn't point to a valid PDF or DOCX file.")
+        raise HTTPException(
+            400,
+            "That link didn't return a PDF or DOCX file. Make sure it points directly at the "
+            "file and is shared publicly (Google Drive / Dropbox share links work; private or "
+            "preview-only links don't). You can also upload the file directly or fill in manually.",
+        )
 
     storage_path = f"{uuid4()}.{extension}"
     upload_resume_file(content, storage_path, _CONTENT_TYPES[extension])

@@ -16,7 +16,7 @@ import {
   Clock,
   type LucideIcon,
 } from "lucide-react";
-import { supabase, supabaseConfigured } from "@/lib/supabase";
+import { API_URL } from "@/lib/api";
 import { BrandMark } from "@/components/BrandMark";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -166,25 +166,17 @@ function DashboardContent() {
 
   useEffect(() => {
     if (!userId) { setError("No user ID in URL. Check your link."); setLoading(false); return; }
-    if (!supabaseConfigured) { setError("App isn't configured correctly (Supabase connection missing). Please contact support."); setLoading(false); return; }
 
     async function load() {
       try {
-        const { data: userData, error: userErr } = await supabase
-          .from("users")
-          .select("id, name, email, target_roles")
-          .eq("id", userId)
-          .single();
-        if (userErr) throw userErr;
-        setUser(userData);
-
-        const { data: jobData, error: jobErr } = await supabase
-          .from("user_jobs")
-          .select("id, match_score, pdf_url, digest_date, status, jobs(id, title, company, location, is_remote, source_url)")
-          .eq("user_id", userId)
-          .order("match_score", { ascending: false });
-        if (jobErr) throw jobErr;
-        setAllJobs((jobData as any) || []);
+        const res = await fetch(`${API_URL}/api/users/${userId}/dashboard`);
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.detail || "Failed to load dashboard.");
+        }
+        const data = await res.json();
+        setUser(data.user);
+        setAllJobs((data.jobs as any) || []);
       } catch (e: any) {
         setError(e.message || "Failed to load dashboard.");
       } finally {

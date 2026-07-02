@@ -32,7 +32,9 @@ import ExperienceSection from "@/components/ExperienceSection";
 import SearchSelect from "@/components/SearchSelect";
 import { SectionCard } from "@/components/ui/Card";
 import { Field, Input, Textarea } from "@/components/ui/Field";
+import { MonthYearField } from "@/components/ui/MonthYearField";
 import { Button } from "@/components/ui/Button";
+import SearchInput from "@/components/SearchInput";
 
 interface ProfileEditorProps {
   initialProfile: Profile;
@@ -177,12 +179,8 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
                 <Field label="Field of study">
                   <Input value={edu.field_of_study} onChange={(e) => update("education", profile.education.map((x, j) => (j === i ? { ...x, field_of_study: e.target.value } : x)))} placeholder="Computer Science" />
                 </Field>
-                <Field label="Start">
-                  <Input value={edu.start_date} onChange={(e) => update("education", profile.education.map((x, j) => (j === i ? { ...x, start_date: e.target.value } : x)))} placeholder="2017" />
-                </Field>
-                <Field label="End">
-                  <Input value={edu.end_date} onChange={(e) => update("education", profile.education.map((x, j) => (j === i ? { ...x, end_date: e.target.value } : x)))} placeholder="2021" />
-                </Field>
+                <MonthYearField label="Start" value={edu.start_date} onChange={(v) => update("education", profile.education.map((x, j) => (j === i ? { ...x, start_date: v } : x)))} />
+                <MonthYearField label="End" value={edu.end_date} onChange={(v) => update("education", profile.education.map((x, j) => (j === i ? { ...x, end_date: v } : x)))} />
               </div>
             </div>
           ))}
@@ -240,9 +238,14 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
 
         {otherCategory && (
           <div className="mt-4">
-            <Field label="Your role">
-              <Input value={profile.job_category} onChange={(e) => update("job_category", e.target.value)} placeholder="e.g. DevOps Engineer, Content Writer…" />
-            </Field>
+            <SearchInput
+              label="Your role"
+              value={profile.job_category}
+              onChange={(v) => update("job_category", v)}
+              apiField="roles"
+              placeholder="e.g. DevOps Engineer, Content Writer…"
+              helperText="Start typing — pick a suggestion or enter your own."
+            />
           </div>
         )}
 

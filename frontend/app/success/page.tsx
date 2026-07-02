@@ -2,14 +2,14 @@
 
 import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { CheckCircle2, Search, Sparkles, FileText, Mail, ArrowRight } from "lucide-react";
+import { CheckCircle2, Target, FileText, MousePointerClick, Mail, ArrowRight } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
-const TIMELINE: { time: string; icon: LucideIcon; desc: string }[] = [
-  { time: "Tonight 2 AM", icon: Search, desc: "Our AI scans 5+ job boards and finds fresh roles for you." },
-  { time: "Tonight 6 AM", icon: Sparkles, desc: "Gemini matches the best jobs to your exact profile." },
-  { time: "Tonight 6:30 AM", icon: FileText, desc: "AI rewrites your resume tailored for each job." },
-  { time: "Tomorrow 7 AM", icon: Mail, desc: "Digest lands in your inbox — ready to apply in 2 minutes." },
+// Sell the outcome, not the implementation. No pipeline internals, no invented numbers.
+const OUTCOMES: { icon: LucideIcon; text: string }[] = [
+  { icon: Target, text: "Curated job matches picked for your profile" },
+  { icon: FileText, text: "ATS-optimized resumes, tailored per role" },
+  { icon: MousePointerClick, text: "One-click, apply-ready links" },
 ];
 
 function SuccessContent() {
@@ -29,47 +29,51 @@ function SuccessContent() {
             You&apos;re in, <span className="text-gradient">{name.split(" ")[0]}!</span>
           </h1>
           <p className="text-lg" style={{ color: "var(--text-muted)" }}>
-            Your profile is live. The AI is already learning your preferences.
+            Your profile is live. Everything from here is automatic.
           </p>
         </div>
 
-        <div className="rounded-lg p-8 text-left space-y-5" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-e1)" }}>
-          <h2 className="font-semibold text-lg" style={{ color: "var(--text)" }}>What happens next</h2>
-          {TIMELINE.map((item) => (
-            <div key={item.time} className="flex items-start gap-4">
-              <div className="flex-shrink-0 flex h-9 w-9 items-center justify-center rounded-md" style={{ background: "#FEF3C7" }}>
-                <item.icon size={18} strokeWidth={1.75} style={{ color: "var(--primary)" }} />
+        <div className="rounded-lg p-8 text-left" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-e1)" }}>
+          <h2 className="font-semibold text-lg mb-5" style={{ color: "var(--text)" }}>
+            Starting tomorrow morning, your Copilot delivers:
+          </h2>
+          <div className="space-y-4">
+            {OUTCOMES.map((o) => (
+              <div key={o.text} className="flex items-center gap-3">
+                <div className="flex-shrink-0 flex h-9 w-9 items-center justify-center rounded-md" style={{ background: "#FEF3C7" }}>
+                  <o.icon size={18} strokeWidth={1.75} style={{ color: "var(--primary)" }} />
+                </div>
+                <span className="text-sm" style={{ color: "var(--text)" }}>{o.text}</span>
               </div>
-              <div>
-                <div className="text-sm font-semibold" style={{ color: "var(--text)" }}>{item.time}</div>
-                <div className="text-sm" style={{ color: "var(--text-muted)" }}>{item.desc}</div>
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
+          <div className="mt-6 pt-5 flex items-center gap-2" style={{ borderTop: "1px solid var(--border)" }}>
+            <Mail size={18} strokeWidth={1.75} style={{ color: "var(--text-muted)" }} />
+            <span className="text-sm font-medium" style={{ color: "var(--text)" }}>In your inbox by 7:00 AM.</span>
+          </div>
         </div>
 
         {id && (
           <div className="rounded-lg p-6 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-e1)" }}>
             <p className="text-sm mb-4" style={{ color: "var(--text-muted)" }}>
-              Bookmark your personal dashboard — check your matches anytime:
+              Your dashboard is ready — track applications, download resumes, and monitor your progress.
             </p>
             <a
               href={`/dashboard?user_id=${id}`}
               className="inline-flex items-center gap-2 px-6 py-3 rounded-md font-semibold text-white transition hover:opacity-90 text-sm"
               style={{ background: "var(--primary)", boxShadow: "var(--shadow-e1)" }}
             >
-              Open My Dashboard
+              Open Dashboard
               <ArrowRight size={16} strokeWidth={2} />
             </a>
           </div>
         )}
 
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-          Email us at{" "}
+          Questions? Email{" "}
           <a href="mailto:gargeypatel123@gmail.com" className="hover:underline" style={{ color: "var(--primary)" }}>
             gargeypatel123@gmail.com
-          </a>{" "}
-          if you have questions.
+          </a>
         </p>
       </div>
     </main>

@@ -2,6 +2,7 @@
 
 import { Plus, Trash2 } from "lucide-react";
 import { Field, Input, Textarea } from "@/components/ui/Field";
+import { MonthYearField } from "@/components/ui/MonthYearField";
 
 export interface ExperienceEntry {
   title: string;
@@ -69,18 +70,14 @@ export default function ExperienceSection({ entries, onChange }: ExperienceSecti
           </div>
 
           <div className="grid sm:grid-cols-2 gap-4">
-            <Field label="Start date">
-              <Input value={entry.start_date} onChange={(e) => update(i, { start_date: e.target.value })} placeholder="Jan 2022" />
-            </Field>
-            <Field label="End date">
-              <Input
-                value={entry.is_current ? "" : entry.end_date}
-                disabled={entry.is_current}
-                onChange={(e) => update(i, { end_date: e.target.value })}
-                placeholder={entry.is_current ? "Present" : "Dec 2023"}
-                className="disabled:opacity-50"
-              />
-            </Field>
+            <MonthYearField label="Start date" value={entry.start_date} onChange={(v) => update(i, { start_date: v })} />
+            <MonthYearField
+              label="End date"
+              value={entry.end_date}
+              onChange={(v) => update(i, { end_date: v })}
+              disabled={entry.is_current}
+              placeholder="Present"
+            />
           </div>
 
           <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: "var(--text-muted)" }}>

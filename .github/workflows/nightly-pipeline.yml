@@ -1,0 +1,31 @@
+# Runs the fetch+match pipeline every night so users wake up to fresh job
+# matches — no manual "Run pipeline now" needed. Render's free tier has no
+# free cron, so GitHub Actions plays scheduler and calls the admin trigger.
+#
+# SETUP (one time): GitHub repo → Settings → Secrets and variables →
+# Actions → New repository secret → name ADMIN_TOKEN, value = the same
+# ADMIN_TOKEN you set on Render. Until then this workflow just skips.
+name: Nightly job pipeline
+
+on:
+  schedule:
+    - cron: "30 20 * * *" # 20:30 UTC = 2:00 AM IST
+  workflow_dispatch: {} # manual run button in the Actions tab
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger fetch + match
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          if [ -z "$ADMIN_TOKEN" ]; then
+            echo "ADMIN_TOKEN secret is not set — skipping. Add it in repo Settings → Secrets → Actions."
+            exit 0
+          fi
+          # --max-time 120 rides out a Render cold start. The endpoint
+          # returns immediately and runs the pipeline in the background.
+          curl --silent --show-error --fail --max-time 120 -X POST \
+            "https://ai-career-copilot-api-nyaa.onrender.com/api/admin/run-pipeline?token=${ADMIN_TOKEN}"

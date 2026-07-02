@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from core.config import get_settings
-from api.routes import resumes, suggestions, users
+from api.routes import resumes, suggestions, users, admin
 
 # ── Logger Setup ─────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -114,6 +114,7 @@ async def health():
 app.include_router(resumes.router,     prefix="/api/resumes",     tags=["Resumes"])
 app.include_router(suggestions.router, prefix="/api/suggestions", tags=["Suggestions"])
 app.include_router(users.router,       prefix="/api/users",       tags=["Users"])
+app.include_router(admin.router,       prefix="/api/admin",       tags=["Admin"])
 
 # ── Future routers (uncomment as you build each phase) ───────────────────────
 # from api.routes import auth, users, jobs, admin

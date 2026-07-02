@@ -69,45 +69,77 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
     user = user_resp.data
     logger.info(f"🎯 Matching jobs for user: {user.get('name', user_id)}")
 
-    # 2. Generate user embedding (or use cached one)
-    if user.get("resume_embedding"):
-        logger.info("   Using cached resume embedding")
-        user_embedding = user["resume_embedding"]
-    else:
-        logger.info("   Generating new resume embedding...")
-        user_embedding = await embed_user_profile(user)
-
-        # Cache the embedding in the users table
-        supabase.table("users").update(
-            {"resume_embedding": user_embedding}
-        ).eq("id", user_id).execute()
-
-    # 3. Query top matching jobs using pgvector cosine similarity
-    # This runs entirely in PostgreSQL — zero AI cost!
+    # 2. Try AI vector matching (Gemini embedding + pgvector). Any failure here
+    #    — no Gemini key, budget exhausted, missing pgvector function, no job
+    #    embeddings yet — degrades gracefully to keyword matching so jobs still
+    #    appear on the dashboard at $0.
     try:
-        matched = supabase.rpc(
-            "match_jobs",
-            {
-                "query_embedding": user_embedding,
-                "match_count": limit,
-            }
-        ).execute()
+        if user.get("resume_embedding"):
+            user_embedding = user["resume_embedding"]
+        else:
+            user_embedding = await embed_user_profile(user)
+            supabase.table("users").update({"resume_embedding": user_embedding}).eq("id", user_id).execute()
 
+        matched = supabase.rpc("match_jobs", {"query_embedding": user_embedding, "match_count": limit}).execute()
         jobs = matched.data or []
-        logger.info(f"   Found {len(jobs)} matching jobs")
-        return jobs
-
+        if jobs:
+            logger.info(f"   Found {len(jobs)} matching jobs (vector)")
+            return jobs
+        logger.info("   Vector match returned nothing — falling back to keyword match")
     except Exception as e:
-        # Fallback: if pgvector isn't set up yet, return recent jobs
-        logger.warning(f"⚠️  pgvector matching failed ({e}), falling back to recency sort")
-        recent = (
-            supabase.table("jobs")
-            .select("*")
-            .order("collected_at", desc=True)
-            .limit(limit)
-            .execute()
-        )
-        return [{"match_score": 0.5, **job} for job in (recent.data or [])]
+        logger.warning(f"⚠️  Vector matching unavailable ({e}) — falling back to keyword match")
+
+    # 3. Keyword fallback — no AI required.
+    recent = (
+        supabase.table("jobs")
+        .select("*")
+        .order("collected_at", desc=True)
+        .limit(300)
+        .execute()
+    )
+    return keyword_match(user, recent.data or [], limit)
+
+
+def keyword_match(user: dict, jobs: list[dict], limit: int) -> list[dict]:
+    """
+    Score jobs by overlap between the user's roles/skills/tools/category and each
+    job's title + description. Pure text — no embeddings, no AI. Used when vector
+    matching isn't available. Returns the top `limit` jobs with a match_score.
+    """
+    import re as _re
+
+    terms: set[str] = set()
+    for field in ("target_roles", "skills", "tools"):
+        for value in (user.get(field) or []):
+            for word in _re.findall(r"[a-z0-9+#.]+", str(value).lower()):
+                if len(word) >= 2:
+                    terms.add(word)
+    for word in _re.findall(r"[a-z0-9+#.]+", str(user.get("job_category") or "").replace("_", " ").lower()):
+        if len(word) >= 2:
+            terms.add(word)
+
+    if not terms:
+        # Nothing to match on — surface the freshest jobs so the dashboard isn't empty.
+        return [{**job, "match_score": 0.3} for job in jobs[:limit]]
+
+    def words(text: str) -> set[str]:
+        return set(_re.findall(r"[a-z0-9+#.]+", str(text).lower()))
+
+    scored: list[dict] = []
+    for job in jobs:
+        title_words = words(job.get("title", ""))
+        body_words = title_words | words(job.get("description", ""))
+        # Whole-word matching (avoids "design" matching "designer", etc.).
+        hits = sum(1 for t in terms if t in body_words)
+        if hits:
+            title_hits = sum(1 for t in terms if t in title_words)
+            raw = (hits + title_hits * 2) / (len(terms) + 2)
+            scored.append({**job, "match_score": round(min(0.98, 0.5 + raw), 4)})
+
+    scored.sort(key=lambda j: j["match_score"], reverse=True)
+    if scored:
+        return scored[:limit]
+    return [{**job, "match_score": 0.3} for job in jobs[:limit]]
 
 
 async def store_matches(user_id: str, matched_jobs: list[dict]) -> int:

@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     resend_daily_limit: int = 100          # Resend free tier
     resume_parse_daily_limit_per_ip: int = 10  # abuse/cost guard on re-uploads; keyed by client IP (no auth yet)
 
+    # Shared secret to authorize the manual pipeline trigger (POST /api/admin/run-pipeline).
+    # Empty = trigger disabled (safe default). Set ADMIN_TOKEN on the server to enable.
+    admin_token: str = ""
+
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"

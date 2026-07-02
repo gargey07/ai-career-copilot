@@ -9,6 +9,7 @@ Run standalone to test:
 """
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -56,6 +57,28 @@ def normalize_job(
         "posted_at": posted_at,
         "collected_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# ── Query matching (profession-agnostic) ──────────────────────────────────────
+_STOPWORDS = {"the", "and", "for", "with", "job", "jobs", "role", "roles", "senior", "junior"}
+
+
+def _query_terms(query: str) -> list[str]:
+    """Meaningful lowercase words from a search query (drops noise/stopwords)."""
+    return [w for w in re.findall(r"[a-z0-9+#]+", (query or "").lower()) if len(w) >= 2 and w not in _STOPWORDS]
+
+
+def _title_matches(title: str, query: str) -> bool:
+    """
+    True if the job title is relevant to the query. Empty query = accept all.
+    Replaces the old hardcoded design-only keyword filters so fetchers work for
+    any profession (backend, PM, marketing, etc.).
+    """
+    terms = _query_terms(query)
+    if not terms:
+        return True
+    t = (title or "").lower()
+    return any(term in t for term in terms)
 
 
 # ── Adzuna Fetcher ────────────────────────────────────────────────────────────
@@ -189,25 +212,20 @@ class JSearchFetcher:
 class RemotiveFetcher:
     BASE_URL = "https://remotive.com/api/remote-jobs"
 
-    async def fetch(self, category: str = "Design", limit: int = 50) -> list[dict]:
-        """Fetch remote design jobs from Remotive (no API key needed)."""
+    async def fetch(self, query: str = "", limit: int = 100) -> list[dict]:
+        """Fetch remote jobs from Remotive (no API key needed), filtered by query."""
         jobs = []
         try:
+            params: dict = {"limit": limit}
+            if query:
+                params["search"] = query
             async with httpx.AsyncClient(timeout=20) as client:
-                resp = await client.get(
-                    self.BASE_URL,
-                    params={"category": category, "limit": limit},
-                )
+                resp = await client.get(self.BASE_URL, params=params)
                 resp.raise_for_status()
                 data = resp.json()
 
                 for job in data.get("jobs", []):
-                    title_lower = (job.get("title") or "").lower()
-                    is_design = any(w in title_lower for w in (
-                        "ui", "ux", "design", "figma", "product designer",
-                        "visual", "interface", "interaction"
-                    ))
-                    if not is_design:
+                    if not _title_matches(job.get("title", ""), query):
                         continue
 
                     jobs.append(normalize_job(
@@ -223,7 +241,7 @@ class RemotiveFetcher:
                         posted_at=job.get("publication_date"),
                     ))
 
-            logger.info(f"Remotive: {len(jobs)} design jobs fetched")
+            logger.info(f"Remotive: {len(jobs)} jobs fetched")
         except Exception as e:
             logger.error(f"❌ Remotive fetch failed: {e}")
         return jobs
@@ -239,10 +257,9 @@ class GreenhouseFetcher:
         "figma", "notion", "canva", "linear", "vercel",
     ]
 
-    async def fetch(self, query: str = "designer") -> list[dict]:
+    async def fetch(self, query: str = "") -> list[dict]:
         """Fetch jobs from Greenhouse-powered company career pages (no API key)."""
         jobs = []
-        query_lower = query.lower()
 
         async with httpx.AsyncClient(timeout=20) as client:
             for slug in self.COMPANY_SLUGS:
@@ -257,12 +274,7 @@ class GreenhouseFetcher:
 
                     for job in data.get("jobs", []):
                         title = job.get("title", "")
-                        title_lower = title.lower()
-                        # Filter to design roles only
-                        if not any(w in title_lower for w in (
-                            "ui", "ux", "design", "product designer",
-                            "visual", "interface", "interaction", "figma"
-                        )):
+                        if not _title_matches(title, query):
                             continue
 
                         location = ""
@@ -288,7 +300,7 @@ class GreenhouseFetcher:
                     logger.debug(f"Greenhouse {slug}: {e}")
                     continue
 
-        logger.info(f"Greenhouse: {len(jobs)} design jobs fetched")
+        logger.info(f"Greenhouse: {len(jobs)} jobs fetched")
         return jobs
 
 
@@ -296,14 +308,14 @@ class GreenhouseFetcher:
 class JobicyFetcher:
     BASE_URL = "https://jobicy.com/api/v2/remote-jobs"
 
-    async def fetch(self, tag: str = "design", count: int = 50) -> list[dict]:
-        """Fetch remote design jobs from Jobicy (no API key needed)."""
+    async def fetch(self, query: str = "", count: int = 100) -> list[dict]:
+        """Fetch remote jobs from Jobicy (no API key needed), filtered by query."""
         jobs = []
         try:
             async with httpx.AsyncClient(timeout=20) as client:
                 resp = await client.get(
                     self.BASE_URL,
-                    params={"count": count, "tag": tag},
+                    params={"count": count},
                     headers={"User-Agent": "Mozilla/5.0 AI-Career-Copilot/1.0"},
                 )
                 resp.raise_for_status()
@@ -311,11 +323,7 @@ class JobicyFetcher:
 
                 for job in data.get("jobs", []):
                     title = job.get("jobTitle", "")
-                    title_lower = title.lower()
-                    if not any(w in title_lower for w in (
-                        "ui", "ux", "design", "figma", "product designer",
-                        "visual", "interface"
-                    )):
+                    if not _title_matches(title, query):
                         continue
 
                     apply_url = job.get("url") or job.get("jobExcerpt", "")
@@ -332,7 +340,7 @@ class JobicyFetcher:
                         posted_at=job.get("pubDate"),
                     ))
 
-            logger.info(f"Jobicy: {len(jobs)} design jobs fetched")
+            logger.info(f"Jobicy: {len(jobs)} jobs fetched")
         except Exception as e:
             logger.error(f"❌ Jobicy fetch failed: {e}")
         return jobs
@@ -364,7 +372,7 @@ async def store_jobs(jobs: list[dict]) -> int:
 
 
 # ── Main Runner ───────────────────────────────────────────────────────────────
-async def run_all_fetchers(query: str = "UI UX Designer") -> int:
+async def run_all_fetchers(query: str = "") -> int:
     """Run all fetchers and store results. Returns total new jobs stored."""
     logger.info(f"🔍 Starting job fetch for query: '{query}'")
 
@@ -374,13 +382,14 @@ async def run_all_fetchers(query: str = "UI UX Designer") -> int:
     greenhouse = GreenhouseFetcher()
     jobicy = JobicyFetcher()
 
-    # Run all fetchers concurrently
+    # Run all fetchers concurrently — the query drives every source now, so the
+    # free (no-key) sources work for any profession, not just design.
     results = await asyncio.gather(
         adzuna.fetch(query=query),
         jsearch.fetch(query=query),
-        remotive.fetch(),
+        remotive.fetch(query=query),
         greenhouse.fetch(query=query),
-        jobicy.fetch(),
+        jobicy.fetch(query=query),
         return_exceptions=True,
     )
 

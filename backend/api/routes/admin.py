@@ -58,6 +58,14 @@ def _usage_services() -> list[dict]:
     return [
         {"service": "gemini_generate", "label": "Gemini — AI generation", "limit": settings.gemini_generate_daily_limit},
         {"service": "gemini_embed",    "label": "Gemini — embeddings",    "limit": settings.gemini_embed_daily_limit},
+        # AI generate_text fallback waterfall — only shows real usage once
+        # Gemini errors/rate-limits and the corresponding key is set on
+        # Render; otherwise these just sit at 0, which is expected.
+        {"service": "groq",            "label": "Groq (fallback)",        "limit": settings.groq_daily_limit},
+        {"service": "openrouter",      "label": "OpenRouter (fallback)",  "limit": settings.openrouter_daily_limit},
+        {"service": "github_models",   "label": "GitHub Models (fallback)", "limit": settings.github_models_daily_limit},
+        {"service": "mistral",         "label": "Mistral (fallback)",     "limit": settings.mistral_daily_limit},
+        {"service": "cohere",          "label": "Cohere (fallback)",      "limit": settings.cohere_daily_limit},
         {"service": "adzuna",          "label": "Adzuna job search",      "limit": settings.adzuna_daily_limit},
         {"service": "jsearch",         "label": "JSearch (RapidAPI)",     "limit": settings.jsearch_daily_limit},
         {"service": "openai",          "label": "OpenAI",                 "limit": settings.openai_daily_limit},

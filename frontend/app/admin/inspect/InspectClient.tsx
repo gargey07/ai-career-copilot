@@ -38,6 +38,9 @@ interface Match {
   job: Job;
   optimized_resume_text: string | null;
   cover_letter_text: string | null;
+  feedback?: string | null;
+  feedback_reason?: string | null;
+  click_count?: number;
 }
 interface InspectUser {
   id: string;
@@ -179,6 +182,8 @@ function InspectContent() {
                     </div>
                     <div className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
                       {m.digest_date} · status: {m.status}
+                      {(m.click_count ?? 0) > 0 && ` · ${m.click_count} apply click${m.click_count === 1 ? "" : "s"}`}
+                      {m.feedback && ` · feedback: ${m.feedback}${m.feedback_reason ? ` (${m.feedback_reason.replace(/_/g, " ")})` : ""}`}
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-1">

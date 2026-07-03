@@ -142,7 +142,7 @@
           <a href="{{ job.pdf_url }}" class="btn-primary" target="_blank">View tailored resume</a>
           {% endif %}
           {% if job.apply_url and job.apply_url != '#' %}
-          <a href="{{ job.apply_url }}" class="btn-secondary" target="_blank">Apply now</a>
+          <a href="{{ job.apply_redirect_url }}" class="btn-secondary" target="_blank">Apply now</a>
           {% endif %}
         </div>
       </div>

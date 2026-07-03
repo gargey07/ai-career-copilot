@@ -12,6 +12,7 @@ import {
   AlertTriangle,
   FileText,
   KeyRound,
+  MousePointerClick,
   type LucideIcon,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
@@ -46,10 +47,16 @@ interface AdminUserRow {
   offered: number;
   last_digest_date: string | null;
 }
+interface Funnel {
+  signup_started: number;
+  profile_review_reached: number;
+  signup_completed: number;
+}
 interface Overview {
   generated_at: string;
   usage_date: string;
-  totals: { users: number; active_users: number; jobs_in_pool: number; matches_delivered: number };
+  totals: { users: number; active_users: number; jobs_in_pool: number; matches_delivered: number; apply_clicks: number };
+  funnel: Funnel;
   api_usage: ApiUsageRow[];
   users: AdminUserRow[];
 }
@@ -66,6 +73,43 @@ function StatCard({ icon: Icon, label, value }: { icon: LucideIcon; label: strin
       </div>
       <div className="text-2xl font-extrabold" style={{ color: "var(--text)" }}>{value}</div>
     </Card>
+  );
+}
+
+function FunnelBar({ funnel }: { funnel: Funnel }) {
+  const stages: { key: keyof Funnel; label: string }[] = [
+    { key: "signup_started", label: "Started signup" },
+    { key: "profile_review_reached", label: "Reached review" },
+    { key: "signup_completed", label: "Completed" },
+  ];
+  const base = funnel.signup_started || 0;
+
+  if (base === 0) {
+    return (
+      <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+        No signup attempts logged yet — this fills in as new visitors reach /signup.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {stages.map((s) => {
+        const count = funnel[s.key] || 0;
+        const pct = Math.round((count / base) * 100);
+        return (
+          <div key={s.key}>
+            <div className="flex items-baseline justify-between mb-1.5">
+              <span className="text-sm font-medium" style={{ color: "var(--text)" }}>{s.label}</span>
+              <span className="text-xs tabular-nums" style={{ color: "var(--text-muted)" }}>{count} ({pct}%)</span>
+            </div>
+            <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--surface-muted)" }}>
+              <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: "var(--primary)" }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -234,12 +278,18 @@ export default function AdminClient() {
         ) : (
           <>
             {/* Totals */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
               <StatCard icon={Users} label="Users" value={overview.totals.users} />
               <StatCard icon={Gauge} label="Active" value={overview.totals.active_users} />
               <StatCard icon={Briefcase} label="Jobs in pool" value={overview.totals.jobs_in_pool} />
               <StatCard icon={Send} label="Matches delivered" value={overview.totals.matches_delivered} />
+              <StatCard icon={MousePointerClick} label="Apply clicks" value={overview.totals.apply_clicks} />
             </div>
+
+            {/* Signup funnel — where people actually drop off, not just who finished */}
+            <SectionCard icon={Users} title="Signup funnel">
+              <FunnelBar funnel={overview.funnel} />
+            </SectionCard>
 
             {/* API budgets */}
             <SectionCard

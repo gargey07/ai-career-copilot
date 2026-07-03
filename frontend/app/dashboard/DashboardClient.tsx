@@ -12,6 +12,8 @@ import {
   ExternalLink,
   AlertTriangle,
   Clock,
+  ThumbsUp,
+  ThumbsDown,
   type LucideIcon,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
@@ -38,6 +40,8 @@ interface UserJob {
   digest_date: string;
   status: string;
   jobs: Job;
+  feedback?: string | null;
+  feedback_reason?: string | null;
 }
 interface User {
   id: string;
@@ -46,6 +50,17 @@ interface User {
   target_roles: string[];
   profile_strength?: number;
 }
+
+// TICKET-008: optional reason chips on a thumbs-down — never required,
+// never blocks the click.
+const FEEDBACK_REASONS: { value: string; label: string }[] = [
+  { value: "too_generic", label: "Too generic" },
+  { value: "missing_skills", label: "Missing skills" },
+  { value: "wrong_project_highlighted", label: "Wrong project highlighted" },
+  { value: "experience_not_prioritized", label: "Experience not prioritized" },
+  { value: "formatting_issue", label: "Formatting issue" },
+  { value: "other", label: "Other" },
+];
 
 // ── Score badge (CSS dot, no emoji) ─────────────────────────────────────────────
 function ScoreBadge({ score }: { score: number }) {
@@ -73,8 +88,97 @@ function StatCard({ icon: Icon, label, value }: { icon: LucideIcon; label: strin
   );
 }
 
+// ── Resume feedback widget (thumbs up/down + reason chips) ─────────────────────
+function ResumeFeedback({ userId, match }: { userId: string; match: UserJob }) {
+  const [feedback, setFeedback] = useState<string | null>(match.feedback || null);
+  const [pickingReason, setPickingReason] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async (value: "up" | "down", reason = "") => {
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${match.id}/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedback: value, reason }),
+      });
+      if (res.ok) {
+        setFeedback(value);
+        setPickingReason(false);
+      }
+    } catch {
+      // best-effort — leave the buttons active so they can retry
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (feedback) {
+    return (
+      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+        Thanks for the feedback{feedback === "down" ? " — we'll use it to improve" : ""}.
+      </p>
+    );
+  }
+
+  if (pickingReason) {
+    return (
+      <div className="space-y-2">
+        <p className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>What was off?</p>
+        <div className="flex flex-wrap gap-2">
+          {FEEDBACK_REASONS.map((r) => (
+            <button
+              key={r.value}
+              type="button"
+              disabled={submitting}
+              onClick={() => submit("down", r.value)}
+              className="px-2.5 py-1 rounded-full text-xs border transition hover:border-[var(--primary)] hover:text-[var(--text)]"
+              style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}
+            >
+              {r.label}
+            </button>
+          ))}
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={() => submit("down")}
+            className="px-2.5 py-1 text-xs hover:underline"
+            style={{ color: "var(--text-muted)" }}
+          >
+            Skip
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-3">
+      <span className="text-xs" style={{ color: "var(--text-muted)" }}>Was this resume useful?</span>
+      <button
+        type="button"
+        disabled={submitting}
+        onClick={() => submit("up")}
+        aria-label="This resume was good"
+        className="p-1.5 rounded-md transition hover:bg-[var(--surface-muted)]"
+      >
+        <ThumbsUp size={15} strokeWidth={1.75} style={{ color: "var(--text-muted)" }} />
+      </button>
+      <button
+        type="button"
+        disabled={submitting}
+        onClick={() => setPickingReason(true)}
+        aria-label="This resume needs improvement"
+        className="p-1.5 rounded-md transition hover:bg-[var(--surface-muted)]"
+      >
+        <ThumbsDown size={15} strokeWidth={1.75} style={{ color: "var(--text-muted)" }} />
+      </button>
+    </div>
+  );
+}
+
 // ── Job card ─────────────────────────────────────────────────────────────────────
-function JobCard({ match, index }: { match: UserJob; index: number }) {
+function JobCard({ match, index, userId }: { match: UserJob; index: number; userId: string }) {
   const job = match.jobs;
   const hasApply = job.source_url && !job.source_url.includes("example.com");
   return (
@@ -116,7 +220,7 @@ function JobCard({ match, index }: { match: UserJob; index: number }) {
 
         {hasApply ? (
           <a
-            href={job.source_url}
+            href={`${API_URL}/r/${match.id}`}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-semibold transition hover:bg-[var(--surface-muted)]"
@@ -131,6 +235,12 @@ function JobCard({ match, index }: { match: UserJob; index: number }) {
           </span>
         )}
       </div>
+
+      {match.pdf_url && (
+        <div className="pt-3" style={{ borderTop: "1px solid var(--border)" }}>
+          <ResumeFeedback userId={userId} match={match} />
+        </div>
+      )}
     </Card>
   );
 }
@@ -314,7 +424,7 @@ function DashboardContent() {
         <h2 className="text-lg font-semibold mb-4" style={{ color: "var(--text)" }}>Today&apos;s matches</h2>
         {todayMatches.length > 0 ? (
           <div className="space-y-4">
-            {todayMatches.map((m, i) => <JobCard key={m.id} match={m} index={i} />)}
+            {todayMatches.map((m, i) => <JobCard key={m.id} match={m} index={i} userId={user.id} />)}
           </div>
         ) : (
           <Card>

@@ -89,8 +89,13 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
 
     # All match rows — aggregated per user in Python (beta-scale data; a few
     # thousand rows at most, not worth a custom SQL function yet).
-    matches_resp = supabase.table("user_jobs").select("user_id, status, digest_date, pdf_url").execute()
+    # click_count is a newer column — fall back gracefully pre-migration.
+    try:
+        matches_resp = supabase.table("user_jobs").select("user_id, status, digest_date, pdf_url, click_count").execute()
+    except Exception:
+        matches_resp = supabase.table("user_jobs").select("user_id, status, digest_date, pdf_url").execute()
     matches = matches_resp.data or []
+    total_clicks = sum(m.get("click_count") or 0 for m in matches)
 
     per_user: dict[str, dict] = {}
     for m in matches:
@@ -148,6 +153,19 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
         for svc in _usage_services()
     ]
 
+    # Signup funnel — how many people started vs. actually finished, not
+    # just the finished count the `users` table alone can show
+    # (docs/PRODUCT_STRATEGY_BETA.md success metrics). funnel_events is a
+    # newer table — missing entirely pre-migration, degrade to zeros.
+    funnel = {"signup_started": 0, "profile_review_reached": 0, "signup_completed": 0}
+    try:
+        funnel_resp = supabase.table("funnel_events").select("event").execute()
+        for row in funnel_resp.data or []:
+            if row.get("event") in funnel:
+                funnel[row["event"]] += 1
+    except Exception:
+        pass
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "usage_date": today,
@@ -156,7 +174,9 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
             "active_users": sum(1 for u in users if u.get("is_active")),
             "jobs_in_pool": jobs_in_pool,
             "matches_delivered": len(matches),
+            "apply_clicks": total_clicks,
         },
+        "funnel": funnel,
         "api_usage": api_usage,
         "users": user_rows,
     }
@@ -188,18 +208,31 @@ async def inspect_user(user_id: str, token: str = Query(..., description="Admin 
         raise HTTPException(404, "User not found.")
     user = user_resp.data[0]
 
-    matches_resp = (
-        supabase.table("user_jobs")
-        .select(
-            "id, match_score, status, digest_date, pdf_url, optimized_resume_text, "
-            "cover_letter_text, jobs(title, company, location, description, source, source_url)"
-        )
-        .eq("user_id", user_id)
-        .order("digest_date", desc=True)
-        .order("match_score", desc=True)
-        .limit(30)
-        .execute()
+    match_fields = (
+        "id, match_score, status, digest_date, pdf_url, optimized_resume_text, "
+        "cover_letter_text, jobs(title, company, location, description, source, source_url)"
     )
+    try:
+        matches_resp = (
+            supabase.table("user_jobs")
+            .select(f"{match_fields}, feedback, feedback_reason, click_count")
+            .eq("user_id", user_id)
+            .order("digest_date", desc=True)
+            .order("match_score", desc=True)
+            .limit(30)
+            .execute()
+        )
+    except Exception:
+        # feedback/click_count are newer columns — degrade gracefully pre-migration.
+        matches_resp = (
+            supabase.table("user_jobs")
+            .select(match_fields)
+            .eq("user_id", user_id)
+            .order("digest_date", desc=True)
+            .order("match_score", desc=True)
+            .limit(30)
+            .execute()
+        )
     matches = matches_resp.data or []
 
     return {
@@ -214,6 +247,9 @@ async def inspect_user(user_id: str, token: str = Query(..., description="Admin 
                 "job": m.get("jobs") or {},
                 "optimized_resume_text": m.get("optimized_resume_text"),
                 "cover_letter_text": m.get("cover_letter_text"),
+                "feedback": m.get("feedback"),
+                "feedback_reason": m.get("feedback_reason"),
+                "click_count": m.get("click_count") or 0,
             }
             for m in matches
         ],

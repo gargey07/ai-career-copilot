@@ -9,6 +9,7 @@ import { emptyProfile, type Profile } from "@/lib/profile";
 import { BrandMark } from "@/components/BrandMark";
 import { WarmBackend } from "@/components/WarmBackend";
 import { getStoredProfile, saveStoredProfile, type StoredProfile } from "@/lib/localProfile";
+import { trackEvent } from "@/lib/analytics";
 
 type Step = "upload" | "review";
 
@@ -22,17 +23,27 @@ export default function SignupClient() {
   // Someone who already confirmed a profile in this browser probably wants
   // their dashboard, not a second signup — offer the shortcut, don't force it.
   useEffect(() => {
-    setReturning(getStoredProfile());
+    const existing = getStoredProfile();
+    setReturning(existing);
+    // Funnel tracking (docs/PRODUCT_STRATEGY_BETA.md success metrics) —
+    // only count genuinely new signup attempts, and only once per browser
+    // session so a page reload doesn't inflate the "started" count.
+    if (!existing && !sessionStorage.getItem("acc:funnel_started_logged")) {
+      sessionStorage.setItem("acc:funnel_started_logged", "1");
+      trackEvent("signup_started");
+    }
   }, []);
 
   const handleUploadReady = (parsed: Profile, filePath: string | null) => {
     setProfile(parsed);
     setResumeFilePath(filePath);
     setStep("review");
+    trackEvent("profile_review_reached");
   };
 
   const handleConfirmed = (id: string, name: string) => {
     saveStoredProfile({ id, name });
+    trackEvent("signup_completed", { userId: id });
     router.push(`/success?name=${encodeURIComponent(name)}&id=${id}`);
   };
 

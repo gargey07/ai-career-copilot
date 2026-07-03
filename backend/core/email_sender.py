@@ -170,12 +170,16 @@ async def send_morning_digest(user_id: str) -> bool:
         logger.info(f"   No matches today for {user['email']} — nothing to email.")
         return False
 
+    backend = settings.backend_url.rstrip("/")
     jobs_data = [
         {
             "title": (m.get("jobs") or {}).get("title"),
             "company": (m.get("jobs") or {}).get("company"),
             "location": (m.get("jobs") or {}).get("location"),
             "apply_url": (m.get("jobs") or {}).get("source_url", "#"),
+            # Routed through the click-tracking redirect (docs/PRODUCT_STRATEGY_BETA.md
+            # "Apply link click rate" metric) rather than linking straight to the board.
+            "apply_redirect_url": f"{backend}/r/{m['id']}",
             "is_remote": (m.get("jobs") or {}).get("is_remote", False),
             "match_score": m.get("match_score", 0.0),
             "pdf_url": m.get("pdf_url"),
@@ -185,7 +189,7 @@ async def send_morning_digest(user_id: str) -> bool:
 
     frontend = (settings.frontend_url or "https://ai-career-copilot-taupe-five.vercel.app").rstrip("/")
     dashboard_url = f"{frontend}/dashboard?user_id={user_id}"
-    unsubscribe_url = f"{settings.backend_url.rstrip('/')}/unsubscribe?token={generate_unsubscribe_token(user_id)}"
+    unsubscribe_url = f"{backend}/unsubscribe?token={generate_unsubscribe_token(user_id)}"
     subject = f"Your top {len(jobs_data)} job match{'es' if len(jobs_data) != 1 else ''} — {date.today().strftime('%b %d')}"
     html = _render_email_html(user.get("name", ""), jobs_data, dashboard_url, unsubscribe_url)
 

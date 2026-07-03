@@ -127,6 +127,16 @@ CREATE TABLE IF NOT EXISTS user_jobs (
   status                  TEXT DEFAULT 'matched',  -- 'matched', 'resume_ready', 'emailed', 'applied', 'interviewing', 'offered', 'rejected'
   applied_at              TIMESTAMPTZ,
 
+  -- Apply-link click tracking (GET /r/{id} redirect — see
+  -- backend/api/routes/redirect.py) — the "Apply link click rate" success metric.
+  click_count             INTEGER DEFAULT 0,
+  last_clicked_at         TIMESTAMPTZ,
+
+  -- Resume feedback (thumbs up/down on the generated PDF)
+  feedback                TEXT,                    -- 'up' | 'down'
+  feedback_reason         TEXT,                    -- only meaningful for 'down'; free chip value, not free text
+  feedback_at             TIMESTAMPTZ,
+
   -- Meta
   digest_date             DATE DEFAULT CURRENT_DATE,  -- which day's digest this belongs to
   created_at              TIMESTAMPTZ DEFAULT NOW(),
@@ -214,6 +224,25 @@ CREATE TABLE IF NOT EXISTS resume_parse_jobs (
 );
 
 -- ============================================================
+-- FUNNEL_EVENTS TABLE
+-- Signup funnel tracking (docs/PRODUCT_STRATEGY_BETA.md success metrics)
+-- — how many people started vs. actually finished, not just the finished
+-- count the `users` table alone can show. session_id is an anonymous
+-- localStorage id, set before a users row exists; user_id is filled in
+-- once known. Public POST /api/analytics/track writes here — no PII,
+-- fixed allowlist of event names enforced server-side.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS funnel_events (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  event       TEXT NOT NULL,          -- 'signup_started' | 'profile_review_reached' | 'signup_completed'
+  session_id  TEXT,
+  user_id     UUID REFERENCES users(id) ON DELETE SET NULL,
+  meta        JSONB DEFAULT '{}'::jsonb,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_funnel_events_event ON funnel_events(event);
+
+-- ============================================================
 -- STORAGE BUCKETS (created via Supabase Storage API in code, not SQL —
 -- see backend/core/resume_parser.py, same pattern as
 -- upload_to_supabase_storage() in backend/core/pdf_generator.py)
@@ -235,9 +264,10 @@ ALTER TABLE email_logs    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pipeline_status ENABLE ROW LEVEL SECURITY;
 ALTER TABLE api_usage     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE resume_parse_jobs ENABLE ROW LEVEL SECURITY;
--- No policies defined for api_usage or resume_parse_jobs — only the
--- backend's service_role key (which bypasses RLS) should ever read or
--- write them.
+ALTER TABLE funnel_events ENABLE ROW LEVEL SECURITY;
+-- No policies defined for api_usage, resume_parse_jobs, or funnel_events
+-- — only the backend's service_role key (which bypasses RLS) should ever
+-- read or write them.
 
 -- Users can only read/update their own profile
 CREATE POLICY "users_own_profile" ON users
@@ -302,6 +332,23 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS resume_file_path    TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS resume_template     TEXT DEFAULT 'modern';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS confidence_flags     JSONB DEFAULT '{}'::jsonb;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_subscribed        BOOLEAN DEFAULT TRUE;
+
+ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS click_count       INTEGER DEFAULT 0;
+ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS last_clicked_at   TIMESTAMPTZ;
+ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS feedback          TEXT;
+ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS feedback_reason   TEXT;
+ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS feedback_at       TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS funnel_events (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  event       TEXT NOT NULL,
+  session_id  TEXT,
+  user_id     UUID REFERENCES users(id) ON DELETE SET NULL,
+  meta        JSONB DEFAULT '{}'::jsonb,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_funnel_events_event ON funnel_events(event);
+ALTER TABLE funnel_events ENABLE ROW LEVEL SECURITY;
 
 -- Race-condition backstop for the once-per-day digest guard (app-level
 -- check lives in core/email_sender.py): two overlapping pipeline runs can

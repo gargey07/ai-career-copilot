@@ -8,13 +8,28 @@ client (which bypasses RLS) instead — same pattern as /resumes/confirm.
 """
 from __future__ import annotations
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from database.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# TICKET-008: resume feedback. 'up' needs no reason; 'down' gets an
+# optional reason chip — never a required field, never blocks the click.
+ALLOWED_FEEDBACK = {"up", "down"}
+ALLOWED_REASONS = {
+    "", "too_generic", "missing_skills", "wrong_project_highlighted",
+    "experience_not_prioritized", "formatting_issue", "other",
+}
+
+
+class FeedbackRequest(BaseModel):
+    feedback: str
+    reason: str = ""
 
 
 def compute_profile_strength(user: dict) -> int:
@@ -65,13 +80,28 @@ async def get_dashboard(user_id: str):
 
     full_user = user_resp.data[0]
 
-    jobs_resp = (
-        supabase.table("user_jobs")
-        .select("id, match_score, pdf_url, digest_date, status, jobs(id, title, company, location, is_remote, source_url)")
-        .eq("user_id", user_id)
-        .order("match_score", desc=True)
-        .execute()
+    # feedback/feedback_reason are newer columns — same missing-migration
+    # fallback pattern as the `projects` select above.
+    jobs_fields = (
+        "id, match_score, pdf_url, digest_date, status, "
+        "jobs(id, title, company, location, is_remote, source_url)"
     )
+    try:
+        jobs_resp = (
+            supabase.table("user_jobs")
+            .select(f"{jobs_fields}, feedback, feedback_reason")
+            .eq("user_id", user_id)
+            .order("match_score", desc=True)
+            .execute()
+        )
+    except Exception:
+        jobs_resp = (
+            supabase.table("user_jobs")
+            .select(jobs_fields)
+            .eq("user_id", user_id)
+            .order("match_score", desc=True)
+            .execute()
+        )
 
     # Only ship the fields the dashboard needs — the rest stays server-side.
     user = {
@@ -82,3 +112,34 @@ async def get_dashboard(user_id: str):
         "profile_strength": compute_profile_strength(full_user),
     }
     return {"user": user, "jobs": jobs_resp.data or []}
+
+
+@router.post("/{user_id}/matches/{match_id}/feedback")
+async def submit_match_feedback(user_id: str, match_id: str, payload: FeedbackRequest):
+    """
+    Thumbs up/down on a generated resume — the cheapest real learning
+    signal in the beta (docs/BETA_PRODUCT_LOG.md experiment #2). Verifies
+    the match actually belongs to this user before writing, so one
+    dashboard link can't overwrite another user's feedback.
+    """
+    if payload.feedback not in ALLOWED_FEEDBACK:
+        raise HTTPException(400, "Feedback must be 'up' or 'down'.")
+    if payload.reason not in ALLOWED_REASONS:
+        raise HTTPException(400, "Unrecognized reason.")
+
+    supabase = get_supabase()
+    owns = supabase.table("user_jobs").select("id").eq("id", match_id).eq("user_id", user_id).execute()
+    if not owns.data:
+        raise HTTPException(404, "Match not found.")
+
+    try:
+        supabase.table("user_jobs").update({
+            "feedback": payload.feedback,
+            "feedback_reason": payload.reason or None,
+            "feedback_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", match_id).execute()
+    except Exception as e:
+        logger.warning(f"   Feedback write failed for match {match_id} ({e}) — feedback columns may be unmigrated.")
+        raise HTTPException(500, "Couldn't save your feedback — try again in a moment.")
+
+    return {"status": "ok"}

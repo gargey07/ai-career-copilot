@@ -362,3 +362,21 @@ ALTER TABLE funnel_events ENABLE ROW LEVEL SECURITY;
 CREATE UNIQUE INDEX IF NOT EXISTS email_logs_one_digest_per_day
   ON email_logs (user_id, type, ((sent_at AT TIME ZONE 'utc')::date))
   WHERE status = 'sent';
+
+-- ============================================================
+-- KEEP-WARM — primary defense against Render free-tier sleep
+-- Render spins the backend down after ~15 idle minutes (~50s cold start
+-- for the next visitor). The GitHub Actions pinger proved unreliable:
+-- its "*/10" schedule actually fired every 1–3 hours in practice.
+-- pg_cron + pg_net (both available on Supabase free tier) ping /health
+-- every 5 minutes straight from the database — reliable and $0.
+-- Run this block once in the Supabase SQL Editor.
+-- ============================================================
+create extension if not exists pg_cron;
+create extension if not exists pg_net;
+select cron.schedule(
+  'keep-render-warm',
+  '*/5 * * * *',
+  $$ select net.http_get('https://ai-career-copilot-api-nyaa.onrender.com/health') $$
+);
+-- To stop it later: select cron.unschedule('keep-render-warm');

@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     openai_api_key: str = ""
     ai_provider: str = "gemini"  # 'gemini' | 'openai'
+    # Cover letters double the Gemini calls per match and nothing user-facing
+    # shows them yet (admin Inspect only) — keep off until they ship.
+    generate_cover_letters: bool = False
 
     # Storage
     r2_account_id: str = ""

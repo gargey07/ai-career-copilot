@@ -465,18 +465,25 @@ async def run_pdf_generator_for_user(user_id: str) -> int:
     supabase = get_supabase()
     today = date.today().isoformat()
 
+    # Select by WORK REMAINING (has resume text, no PDF yet), not by
+    # status — the digest email flips matches to 'emailed', which used to
+    # lock them out of PDF generation the same way it locked them out of
+    # the optimizer. 'pdf_failed' is excluded: those retry only through
+    # the user-facing Retry button (see api/routes/users.py retry-pdf).
     matches_resp = (
         supabase.table("user_jobs")
         .select("id, job_id")
         .eq("user_id", user_id)
         .eq("digest_date", today)
-        .eq("status", "resume_ready")
+        .not_.is_("optimized_resume_text", "null")
+        .is_("pdf_url", "null")
+        .neq("status", "pdf_failed")
         .execute()
     )
     matches = matches_resp.data or []
 
     if not matches:
-        logger.info(f"   No resume_ready matches for user {user_id}")
+        logger.info(f"   No matches awaiting PDF generation for user {user_id}")
         return 0
 
     logger.info(f"   Processing {len(matches)} resume(s) for PDF...")

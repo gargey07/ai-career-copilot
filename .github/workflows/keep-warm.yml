@@ -2,9 +2,16 @@
 # and the next visitor then eats a ~50-second cold start. This pings /health
 # every 10 minutes so the service (usually) stays warm during the day.
 #
+# ⚠ BACKUP ONLY — do not trust this as the primary keep-warm. Measured in
+# production (July 2026): GitHub actually ran this "*/10" schedule every
+# 1–3 HOURS (08:29, 05:10, 01:20, 23:46, …) — GitHub throttles scheduled
+# workflows far below their nominal cadence, so the service still slept
+# most of the day. The PRIMARY keep-warm is a Supabase pg_cron job pinging
+# /health every 5 minutes — see the "KEEP-WARM" block in
+# database/schema.sql. This workflow stays as a redundant fallback.
+#
 # Notes:
-# - GitHub schedules only run on the default branch (main) and aren't
-#   guaranteed to fire exactly on time — that's fine, this is best-effort.
+# - GitHub schedules only run on the default branch (main).
 # - Render free instances get 750 running hours/month; one always-warm
 #   service (~720h) fits inside that.
 name: Keep backend warm

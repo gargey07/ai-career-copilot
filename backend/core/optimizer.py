@@ -184,13 +184,20 @@ async def run_optimizer_for_user(user_id: str) -> int:
 
     user = user_resp.data
 
-    # 2. Get today's top matches (only top N for AI, ranked by match_score)
+    # 2. Get today's top matches (only top N for AI, ranked by match_score).
+    #    Select by WORK REMAINING (no resume text yet), not by status: the
+    #    digest email flips matches to 'emailed', and filtering on
+    #    status='matched' alone permanently locked those out of resume
+    #    generation — the "Resumes Ready: 0 forever" bug. 'pdf_failed' rows
+    #    are excluded: they already have resume text and belong to the
+    #    user-facing Retry path, not the optimizer.
     matches_resp = (
         supabase.table("user_jobs")
         .select("id, job_id, rank")
         .eq("user_id", user_id)
         .eq("digest_date", today)
-        .eq("status", "matched")
+        .is_("optimized_resume_text", "null")
+        .in_("status", ["matched", "emailed"])
         .order("rank", desc=False)
         .limit(ai_limit)
         .execute()
@@ -201,7 +208,7 @@ async def run_optimizer_for_user(user_id: str) -> int:
         logger.info(f"   No unprocessed matches found for user {user_id} today")
         return 0
 
-    # 3. For each top match, generate resume + cover letter
+    # 3. For each top match, generate resume (+ cover letter when enabled)
     generated = 0
     for match in matches:
         job_resp = (
@@ -226,13 +233,19 @@ async def run_optimizer_for_user(user_id: str) -> int:
                 job_category=user.get("job_category") or "ui_ux_designer",
             )
 
-            cover_letter = await generate_cover_letter(
-                name=user.get("name", "Applicant"),
-                resume_text=user["resume_text"],
-                job_title=job["title"],
-                company=job["company"],
-                job_description=job.get("description", ""),
-            )
+            # Cover letters are a full extra Gemini call per match and appear
+            # nowhere user-facing yet (only the admin Inspect view) — off by
+            # default; flip GENERATE_COVER_LETTERS=true when they ship in the
+            # product. Halves per-user AI latency on the 0.1-CPU instance.
+            cover_letter = None
+            if settings.generate_cover_letters:
+                cover_letter = await generate_cover_letter(
+                    name=user.get("name", "Applicant"),
+                    resume_text=user["resume_text"],
+                    job_title=job["title"],
+                    company=job["company"],
+                    job_description=job.get("description", ""),
+                )
 
             # Update the user_jobs record
             supabase.table("user_jobs").update({

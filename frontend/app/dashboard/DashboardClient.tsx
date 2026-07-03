@@ -469,6 +469,23 @@ function DashboardContent() {
     null
   );
 
+  // Previous days' matches, grouped by digest_date descending, capped at
+  // the 5 most recent dates to keep the page light. Same JobCard as today
+  // (feedback/apply/retry are per-match, so they all keep working).
+  const historyByDate = new Map<string, UserJob[]>();
+  for (const j of allJobs) {
+    if (!j.digest_date || j.digest_date === today) continue;
+    const list = historyByDate.get(j.digest_date) || [];
+    list.push(j);
+    historyByDate.set(j.digest_date, list);
+  }
+  const historyDates = Array.from(historyByDate.keys()).sort().reverse().slice(0, 5);
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  const historyLabel = (d: string) =>
+    d === yesterday
+      ? "Yesterday"
+      : new Date(`${d}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "long" });
+
   return (
     <main className="min-h-screen" style={{ background: "var(--bg)", color: "var(--text)" }}>
       <nav className="px-6 py-4" style={{ borderBottom: "1px solid var(--border)" }}>
@@ -549,6 +566,12 @@ function DashboardContent() {
           <div className="space-y-4">
             {todayMatches.map((m, i) => <JobCard key={m.id} match={m} index={i} userId={user.id} />)}
           </div>
+        ) : historyDates.length > 0 ? (
+          // No new matches today but there's history below — a slim note
+          // beats a big empty card that pushes real content off-screen.
+          <p className="text-sm mb-2" style={{ color: "var(--text-muted)" }}>
+            No new matches yet today — new jobs arrive every morning. Your earlier matches are below.
+          </p>
         ) : (
           <Card>
             <EmptyState
@@ -558,6 +581,18 @@ function DashboardContent() {
             />
           </Card>
         )}
+
+        {/* Previous days, one section per date, most recent first */}
+        {historyDates.map((d) => (
+          <div key={d} className="mt-10">
+            <h2 className="text-lg font-semibold mb-4" style={{ color: "var(--text)" }}>{historyLabel(d)}</h2>
+            <div className="space-y-4">
+              {(historyByDate.get(d) || []).map((m, i) => (
+                <JobCard key={m.id} match={m} index={i} userId={user.id} />
+              ))}
+            </div>
+          </div>
+        ))}
 
         <div className="mt-12 text-center text-sm" style={{ color: "var(--text-muted)" }}>
           <p>New matches every morning</p>

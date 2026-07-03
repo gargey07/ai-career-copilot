@@ -65,7 +65,7 @@ async def get_dashboard(user_id: str):
     base_fields = (
         "id, name, email, target_roles, summary, work_experience, education, "
         "skills, tools, preferred_locations, phone, location, resume_file_path, "
-        "linkedin_url, portfolio_url, github_url"
+        "linkedin_url, portfolio_url, github_url, preferred_digest_time"
     )
     try:
         user_resp = (
@@ -125,8 +125,27 @@ async def get_dashboard(user_id: str):
         "email": full_user.get("email"),
         "target_roles": full_user.get("target_roles") or [],
         "profile_strength": compute_profile_strength(full_user),
+        "preferred_digest_time": full_user.get("preferred_digest_time"),
     }
     return {"user": user, "jobs": jobs}
+
+class PreferencesUpdate(BaseModel):
+    preferred_digest_time: str
+
+@router.patch("/{user_id}/preferences")
+async def update_preferences(user_id: str, payload: PreferencesUpdate):
+    """T-012: Update user's preferred digest time."""
+    supabase = get_supabase()
+    
+    try:
+        supabase.table("users").update({
+            "preferred_digest_time": payload.preferred_digest_time
+        }).eq("id", user_id).execute()
+    except Exception as e:
+        logger.error(f"Failed to update preferences for {user_id}: {e}")
+        raise HTTPException(500, "Could not save preferences.")
+        
+    return {"status": "ok"}
 
 
 @router.post("/{user_id}/matches/{match_id}/feedback")

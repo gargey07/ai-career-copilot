@@ -54,6 +54,7 @@ interface User {
   email: string;
   target_roles: string[];
   profile_strength?: number;
+  preferred_digest_time?: string | null;
 }
 
 // TICKET-008: optional reason chips on a thumbs-down — never required,
@@ -297,6 +298,71 @@ function JobCard({ match, index, userId }: { match: UserJob; index: number; user
           <ResumeFeedback userId={userId} match={match} />
         </div>
       )}
+    </Card>
+  );
+}
+
+// ── T-012: Digest Time Picker ─────────────────────────────────────────────────
+const TIME_SLOTS = [
+  { label: "6:00 AM", value: "06:00:00" },
+  { label: "7:00 AM", value: "07:00:00" },
+  { label: "8:00 AM", value: "08:00:00" },
+  { label: "9:00 AM", value: "09:00:00" },
+];
+
+function DigestTimePicker({
+  userId,
+  currentTime,
+}: {
+  userId: string;
+  currentTime?: string | null;
+}) {
+  const [selected, setSelected] = useState(currentTime || "07:00:00");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  async function save(time: string) {
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/api/users/${userId}/preferences`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preferred_digest_time: time }),
+      });
+      if (res.ok) {
+        setSelected(time);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-center gap-2 mb-3">
+        <Clock size={18} strokeWidth={1.75} style={{ color: "var(--primary)" }} />
+        <span className="text-sm font-semibold" style={{ color: "var(--text)" }}>Daily Digest Time</span>
+        {saved && <span className="text-xs text-green-500 animate-fade-in ml-auto">Saved!</span>}
+      </div>
+      <div className="flex gap-2 flex-wrap mb-2">
+        {TIME_SLOTS.map((slot) => (
+          <button
+            key={slot.value}
+            disabled={saving}
+            onClick={() => save(slot.value)}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
+              selected === slot.value
+                ? "bg-[var(--primary)] border-[var(--primary)] text-white"
+                : "bg-transparent border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--primary)] hover:text-[var(--text)]"
+            }`}
+          >
+            {slot.label}
+          </button>
+        ))}
+      </div>
+      <p className="text-xs" style={{ color: "var(--text-muted)" }}>Your digest will arrive around this time each morning (IST)</p>
     </Card>
   );
 }
@@ -593,6 +659,15 @@ function DashboardContent() {
             </div>
           </div>
         ))}
+
+        {/* T-012: Settings panel */}
+        <div className="mt-12 space-y-4">
+          <h2 className="text-sm font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Preferences</h2>
+          <DigestTimePicker
+            userId={user.id}
+            currentTime={user.preferred_digest_time}
+          />
+        </div>
 
         <div className="mt-12 text-center text-sm" style={{ color: "var(--text-muted)" }}>
           <p>New matches every morning</p>

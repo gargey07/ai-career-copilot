@@ -65,16 +65,25 @@ async def get_dashboard(user_id: str):
     base_fields = (
         "id, name, email, target_roles, summary, work_experience, education, "
         "skills, tools, preferred_locations, phone, location, resume_file_path, "
-        "linkedin_url, portfolio_url, github_url, preferred_digest_time"
+        "linkedin_url, portfolio_url, github_url"
     )
-    try:
-        user_resp = (
-            supabase.table("users").select(f"{base_fields}, projects").eq("id", user_id).execute()
-        )
-    except Exception:
-        # projects is a newer column — dashboards must keep working on a
-        # database that hasn't run the migration in database/schema.sql yet.
-        user_resp = supabase.table("users").select(base_fields).eq("id", user_id).execute()
+    # `projects` and `preferred_digest_time` are newer columns — dashboards
+    # must keep working on a database that hasn't run the corresponding
+    # migration yet. Try progressively smaller selects rather than 500ing
+    # outright the moment either column is missing.
+    user_resp = None
+    for fields in (
+        f"{base_fields}, projects, preferred_digest_time",
+        f"{base_fields}, projects",
+        base_fields,
+    ):
+        try:
+            user_resp = supabase.table("users").select(fields).eq("id", user_id).execute()
+            break
+        except Exception:
+            continue
+    if user_resp is None:
+        raise HTTPException(500, "We couldn't load this profile — please try again.")
     if not user_resp.data:
         raise HTTPException(404, "We couldn't find a profile for this link.")
 

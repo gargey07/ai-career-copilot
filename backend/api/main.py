@@ -1,7 +1,10 @@
 """
 AI Career Copilot — FastAPI Application Entry Point
 """
+import asyncio
 import logging
+import os
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -23,12 +26,46 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+# ── Startup self-heal: Playwright Chromium ───────────────────────────────────
+async def _ensure_chromium_installed() -> None:
+    """
+    Render's build step installs Chromium for PDF rendering, but that install
+    has failed silently in production before (build shows green, then every
+    PDF errors with "Executable doesn't exist" until someone notices). This
+    runs `playwright install chromium` again at startup as a safety net —
+    it's idempotent (fast no-op when the browser is already there, downloads
+    it when it isn't), so a bad build self-heals on boot instead of leaving
+    PDFs broken until the next manual clear-cache redeploy.
+
+    Runs as a background task so it never delays /health — Render kills
+    deploys whose health check doesn't respond quickly.
+    """
+    if os.environ.get("CHROMIUM_EXECUTABLE_PATH"):
+        return  # host provides its own browser; nothing to install
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "playwright", "install", "chromium",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await proc.communicate()
+        if proc.returncode == 0:
+            logger.info("✅ Playwright Chromium verified/installed (startup check)")
+        else:
+            tail = (out or b"")[-500:].decode(errors="replace")
+            logger.error(f"❌ Startup Chromium install failed (rc={proc.returncode}): {tail}")
+    except Exception as e:
+        logger.error(f"❌ Startup Chromium install crashed: {e}")
+
+
 # ── App Lifespan ─────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Runs on startup and shutdown."""
     logger.info(f"🚀 AI Career Copilot API starting — env: {settings.app_env}")
+    chromium_task = asyncio.create_task(_ensure_chromium_installed())
     yield
+    chromium_task.cancel()
     logger.info("👋 AI Career Copilot API shutting down")
 
 

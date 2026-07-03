@@ -307,6 +307,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS is_subscribed        BOOLEAN DEFAULT 
 -- check lives in core/email_sender.py): two overlapping pipeline runs can
 -- never both record a 'sent' morning_digest for the same user on the same
 -- UTC day.
+-- Note the double parens around the cast expression — Postgres requires
+-- an index expression (as opposed to a plain column name) to be wrapped
+-- in its own parens, so `(x)::date` needs `((x)::date)` here.
 CREATE UNIQUE INDEX IF NOT EXISTS email_logs_one_digest_per_day
-  ON email_logs (user_id, type, (sent_at AT TIME ZONE 'utc')::date)
+  ON email_logs (user_id, type, ((sent_at AT TIME ZONE 'utc')::date))
   WHERE status = 'sent';

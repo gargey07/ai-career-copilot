@@ -98,6 +98,7 @@
     .footer-logo { font-size: 13px; font-weight: 700; color: #0F2F3A; margin-bottom: 6px; }
     .footer-text { font-size: 11px; color: #94A3B8; line-height: 1.7; }
     .footer-text a { color: #B45309; text-decoration: none; }
+    .disclosure { font-size: 10px; color: #CBD5E1; line-height: 1.6; margin-top: 12px; padding-top: 12px; border-top: 1px solid #E5E7EB; }
   </style>
 </head>
 <body>
@@ -160,7 +161,11 @@
         Built by <a href="https://gargey-patel-portfolio.vercel.app">Gargey Patel</a> &nbsp;·&nbsp;
         gargeypatel123@gmail.com<br>
         You're receiving this because you joined the beta.
-        Reply to this email any time to unsubscribe or give feedback.
+        {% if unsubscribe_url %}<a href="{{ unsubscribe_url }}">Unsubscribe</a>{% endif %}
+      </p>
+      <p class="disclosure">
+        We can't verify whether a listing is still open, the poster's legitimacy, salary accuracy, or hiring urgency —
+        job details come from the source board. Always double-check before applying.
       </p>
     </div>
 

@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from core.config import get_settings
-from api.routes import resumes, suggestions, users, admin
+from api.routes import resumes, suggestions, users, admin, unsubscribe
 
 # ── Logger Setup ─────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -115,6 +115,9 @@ app.include_router(resumes.router,     prefix="/api/resumes",     tags=["Resumes
 app.include_router(suggestions.router, prefix="/api/suggestions", tags=["Suggestions"])
 app.include_router(users.router,       prefix="/api/users",       tags=["Users"])
 app.include_router(admin.router,       prefix="/api/admin",       tags=["Admin"])
+# No prefix: this is a full-page link clicked from an email, kept short
+# and stable at the API root rather than nested under /api.
+app.include_router(unsubscribe.router, tags=["Unsubscribe"])
 
 # ── Future routers (uncomment as you build each phase) ───────────────────────
 # from api.routes import auth, users, jobs, admin

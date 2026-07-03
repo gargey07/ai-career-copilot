@@ -3,6 +3,7 @@ import { BrandMark } from "@/components/BrandMark";
 import { NavCta } from "@/components/NavCta";
 import { HeroCtas } from "@/components/HeroCtas";
 import { WarmBackend } from "@/components/WarmBackend";
+import { AiDisclosure } from "@/components/AiDisclosure";
 import { BRAND_NAME } from "@/lib/brand";
 import type { LucideIcon } from "lucide-react";
 
@@ -124,6 +125,7 @@ export default function Home() {
           </a>{" "}
           · gargeypatel123@gmail.com
         </p>
+        <AiDisclosure />
       </footer>
     </main>
   );

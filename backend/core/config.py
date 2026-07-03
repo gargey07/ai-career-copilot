@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_secret_key: str = "change-me-in-production"
     frontend_url: str = ""
+    # Own public URL — needed to build the unsubscribe link that ships inside
+    # emails (that link must point at the backend directly, not the frontend).
+    # Falls back to the known Render URL if unset, same pattern as frontend_url.
+    backend_url: str = "https://ai-career-copilot-api-nyaa.onrender.com"
     founder_email: str = "gargeypatel123@gmail.com"
     digest_time: str = "07:00"
     max_jobs_per_user: int = 10

@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS users (
 
   -- Account settings
   tier                TEXT DEFAULT 'free',         -- 'free', 'pro', 'enterprise'
-  is_active           BOOLEAN DEFAULT TRUE,
+  is_active           BOOLEAN DEFAULT TRUE,        -- gates matching/pipeline eligibility
+  is_subscribed       BOOLEAN DEFAULT TRUE,        -- gates EMAIL only — unsubscribing must not silently stop matching
   email_time          TIME DEFAULT '07:00:00',     -- preferred time for morning digest
   timezone            TEXT DEFAULT 'Asia/Kolkata',
 
@@ -300,3 +301,12 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS education            JSONB DEFAULT '[
 ALTER TABLE users ADD COLUMN IF NOT EXISTS resume_file_path    TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS resume_template     TEXT DEFAULT 'modern';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS confidence_flags     JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_subscribed        BOOLEAN DEFAULT TRUE;
+
+-- Race-condition backstop for the once-per-day digest guard (app-level
+-- check lives in core/email_sender.py): two overlapping pipeline runs can
+-- never both record a 'sent' morning_digest for the same user on the same
+-- UTC day.
+CREATE UNIQUE INDEX IF NOT EXISTS email_logs_one_digest_per_day
+  ON email_logs (user_id, type, (sent_at AT TIME ZONE 'utc')::date)
+  WHERE status = 'sent';

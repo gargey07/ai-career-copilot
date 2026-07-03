@@ -17,6 +17,7 @@ import {
 import { API_URL } from "@/lib/api";
 import { getStoredProfile } from "@/lib/localProfile";
 import { BrandMark } from "@/components/BrandMark";
+import { AiDisclosure } from "@/components/AiDisclosure";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -333,6 +334,7 @@ function DashboardContent() {
               gargeypatel123@gmail.com
             </a>
           </p>
+          <AiDisclosure />
         </div>
       </div>
     </main>

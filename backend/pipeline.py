@@ -32,6 +32,12 @@ from core.skill_maps import get_search_queries
 from core.optimizer import run_optimizer_for_user
 from core.pdf_generator import run_pdf_generator_for_user
 from core.email_sender import send_morning_digest
+from core.admin_alerts import (
+    alert_pipeline_failure,
+    alert_zero_jobs_fetched,
+    alert_ai_exhausted,
+    alert_email_send_failures,
+)
 
 # Logger
 logging.basicConfig(
@@ -45,6 +51,67 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+# ── T-004: Digest cooldown check ─────────────────────────────────────────────
+def _is_cooldown_active(user: dict) -> tuple[bool, str]:
+    """
+    Returns (True, reason_msg) if the user received a digest within MIN_DIGEST_GAP_HOURS.
+    Returns (False, "") if it's safe to send.
+    """
+    last_sent = user.get("last_digest_sent_at")
+    if not last_sent:
+        return False, ""
+
+    from datetime import timezone
+    try:
+        if isinstance(last_sent, str):
+            last_dt = datetime.fromisoformat(last_sent.replace("Z", "+00:00"))
+        else:
+            last_dt = last_sent
+
+        now = datetime.now(timezone.utc)
+        hours_since = (now - last_dt).total_seconds() / 3600
+        gap = settings.min_digest_gap_hours
+
+        if hours_since < gap:
+            next_time = last_dt.replace(tzinfo=timezone.utc) if last_dt.tzinfo is None else last_dt
+            from datetime import timedelta
+            next_send = (last_dt + timedelta(hours=gap)).strftime("%H:%M UTC")
+            return True, f"Cooldown active ({hours_since:.1f}h since last digest, need {gap}h). Next: {next_send}"
+    except Exception as e:
+        logger.warning(f"Could not parse last_digest_sent_at: {e}")
+
+    return False, ""
+
+
+# ── T-017: Sent job IDs dedup ─────────────────────────────────────────────────
+def _filter_already_sent(matches: list[dict], sent_job_ids: list[str]) -> list[dict]:
+    """Remove jobs that were already included in a previous digest."""
+    if not sent_job_ids:
+        return matches
+    sent_set = set(sent_job_ids)
+    filtered = [m for m in matches if m.get("job_id") not in sent_set]
+    skipped = len(matches) - len(filtered)
+    if skipped:
+        logger.info(f"   🔁 Dedup: skipped {skipped} already-sent job(s)")
+    return filtered
+
+
+def _append_sent_job_ids(user_id: str, new_job_ids: list[str]) -> None:
+    """Append newly-sent job IDs to the user's sent_job_ids array."""
+    if not new_job_ids:
+        return
+    supabase = get_supabase()
+    try:
+        # Fetch current list
+        resp = supabase.table("users").select("sent_job_ids").eq("id", user_id).single().execute()
+        current = resp.data.get("sent_job_ids") or [] if resp.data else []
+        updated = list(set(current + new_job_ids))  # dedupe
+        supabase.table("users").update({"sent_job_ids": updated}).eq("id", user_id).execute()
+        logger.info(f"   📝 Appended {len(new_job_ids)} job ID(s) to sent_job_ids")
+    except Exception as e:
+        logger.warning(f"   Could not update sent_job_ids: {e}")
 
 
 async def embed_unembedded_jobs(batch_size: int = 50) -> int:
@@ -115,9 +182,14 @@ async def run_pipeline(test_mode: bool = False):
                 total_fetched += count
         stats["jobs_fetched"] = total_fetched
         logger.info(f"   ✅ {total_fetched} new jobs stored across {len(categories)} categories")
+        # T-013: Alert if 0 jobs fetched but users are waiting
+        if total_fetched == 0 and len(categories) > 0 and not test_mode:
+            await alert_zero_jobs_fetched(len(categories), categories)
     except Exception as e:
         logger.error(f"   ❌ Job fetch failed: {e}")
         stats["jobs_fetched"] = 0
+        if not test_mode:
+            await alert_pipeline_failure(str(e), stats, step="Step 1: Job Fetch")
 
     # ── Step 1.5: Embed Jobs ──────────────────────────────────────────────────
     logger.info("\n🧠 STEP 1.5: Embedding Jobs (for vector matching)")
@@ -142,20 +214,38 @@ async def run_pipeline(test_mode: bool = False):
     logger.info("\n🤖 STEP 3: Generating AI Resumes")
     total_resumes = 0
     try:
-        users_resp = supabase.table("users").select("id, name").eq("is_active", True).execute()
+        users_resp = supabase.table("users").select("id, name, last_digest_sent_at, sent_job_ids").eq("is_active", True).execute()
         users = users_resp.data or []
         if test_mode:
             users = users[:1]  # Only 1 user in test mode
 
         for user in users:
+            # T-004: Check cooldown before processing
+            cooldown, reason = _is_cooldown_active(user)
+            if cooldown and not test_mode:
+                logger.info(f"   ⏳ Skipping {user.get('name', user['id'])}: {reason}")
+                continue
+
             count = await run_optimizer_for_user(user["id"])
             total_resumes += count
             logger.info(f"   {user.get('name', user['id'])}: {count} resumes generated")
 
         stats["resumes_generated"] = total_resumes
         logger.info(f"   ✅ Total: {total_resumes} resumes generated")
+    except RuntimeError as e:
+        # T-013: RuntimeError from WaterfallAIProvider = all 6 providers exhausted
+        if "all" in str(e).lower() and "provider" in str(e).lower():
+            logger.error(f"   ❌ AI providers exhausted: {e}")
+            if not test_mode:
+                await alert_ai_exhausted(str(e))
+        else:
+            logger.error(f"   ❌ AI generation failed: {e}")
+            if not test_mode:
+                await alert_pipeline_failure(str(e), stats, step="Step 3: AI Resume Generation")
     except Exception as e:
         logger.error(f"   ❌ AI generation failed: {e}")
+        if not test_mode:
+            await alert_pipeline_failure(str(e), stats, step="Step 3: AI Resume Generation")
 
     # ── Step 4: Generate PDFs ───────────────────────────────────────────────────────
     logger.info("\n📄 STEP 4: PDF Generation")
@@ -180,12 +270,44 @@ async def run_pipeline(test_mode: bool = False):
     else:
         try:
             for user in users:
+                # T-004: Final cooldown gate before send
+                cooldown, reason = _is_cooldown_active(user)
+                if cooldown:
+                    logger.info(f"   ⏳ {user.get('name', user['id'])}: {reason}")
+                    continue
+
                 success = await send_morning_digest(user["id"])
                 if success:
                     emails_sent += 1
+                    # T-004: Record send time
+                    # T-017: Append sent job IDs
+                    try:
+                        sent_jobs_resp = (
+                            supabase.table("user_jobs")
+                            .select("job_id")
+                            .eq("user_id", user["id"])
+                            .eq("digest_date", today)
+                            .in_("status", ["pdf_ready", "resume_ready"])
+                            .execute()
+                        )
+                        new_ids = [r["job_id"] for r in (sent_jobs_resp.data or [])]
+                        _append_sent_job_ids(user["id"], new_ids)
+                        supabase.table("users").update({
+                            "last_digest_sent_at": datetime.now(timezone.utc).isoformat(),
+                        }).eq("id", user["id"]).execute()
+                    except Exception as e:
+                        logger.warning(f"   Could not update post-send fields: {e}")
+
             logger.info(f"   ✅ Total: {emails_sent} email(s) sent")
+            # T-013: Alert if high failure rate
+            emails_attempted = len([u for u in users if not _is_cooldown_active(u)[0]])
+            emails_failed = emails_attempted - emails_sent
+            if emails_failed > 0 and not test_mode:
+                await alert_email_send_failures(emails_failed, emails_attempted)
         except Exception as e:
             logger.error(f"   ❌ Email sending failed: {e}")
+            if not test_mode:
+                await alert_pipeline_failure(str(e), stats, step="Step 5: Email Sending")
     stats["email_sent"] = emails_sent > 0
 
     # ── Done ──────────────────────────────────────────────────────────────────
@@ -226,4 +348,15 @@ if __name__ == "__main__":
     os.makedirs("logs", exist_ok=True)
 
     test_mode = "--test" in sys.argv
-    asyncio.run(run_pipeline(test_mode=test_mode))
+
+    async def _main():
+        try:
+            await run_pipeline(test_mode=test_mode)
+        except Exception as e:
+            # T-013: Top-level catastrophic failure
+            logger.critical(f"💥 PIPELINE CRASHED: {e}")
+            if not test_mode:
+                await alert_pipeline_failure(str(e), {}, step="Top-Level Crash")
+            raise
+
+    asyncio.run(_main())

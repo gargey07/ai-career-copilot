@@ -317,13 +317,23 @@ export default function AdminClient() {
                           <td className="px-2 py-3 text-right tabular-nums" style={{ color: "var(--text)" }}>{u.offered}</td>
                           <td className="px-2 py-3 text-xs" style={{ color: "var(--text-muted)" }}>{u.last_digest_date || "—"}</td>
                           <td className="px-2 py-3">
-                            <a
-                              href={`/dashboard?user_id=${u.id}`}
-                              className="text-xs font-medium hover:underline"
-                              style={{ color: "var(--primary)" }}
-                            >
-                              View dashboard
-                            </a>
+                            <div className="flex flex-col gap-1">
+                              <a
+                                href={`/dashboard?user_id=${u.id}`}
+                                className="text-xs font-medium hover:underline"
+                                style={{ color: "var(--primary)" }}
+                              >
+                                View dashboard
+                              </a>
+                              <a
+                                href={`/admin/inspect?user_id=${u.id}`}
+                                className="text-xs font-medium hover:underline"
+                                style={{ color: "var(--text-muted)" }}
+                                title="See the real matches + AI resume text for this user"
+                              >
+                                Inspect quality
+                              </a>
+                            </div>
                           </td>
                         </tr>
                       ))}

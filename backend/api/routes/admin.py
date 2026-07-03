@@ -1,8 +1,11 @@
 """
 Admin API — founder-only visibility & controls
 ──────────────────────────────────────────────
-- POST /run-pipeline  → kick the fetch+match pipeline on demand
-- GET  /overview      → users' progress + today's API usage vs budget caps
+- POST /run-pipeline           → kick the fetch+match pipeline on demand
+- GET  /overview                → users' progress + today's API usage vs budget caps
+- GET  /users/{id}/inspect      → one user's profile + every match, with the
+                                    actual AI-optimized resume/cover-letter text —
+                                    for judging match and resume QUALITY, not just counts
 
 Everything is gated by a shared secret (ADMIN_TOKEN); disabled entirely
 until that's set. No general auth exists yet, so keep the token private.
@@ -156,4 +159,62 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
         },
         "api_usage": api_usage,
         "users": user_rows,
+    }
+
+
+# ── Inspect — the "is the output actually good?" view ──────────────────────────
+@router.get("/users/{user_id}/inspect")
+async def inspect_user(user_id: str, token: str = Query(..., description="Admin token")):
+    """
+    Everything needed to judge quality, not just counts: the user's real
+    profile, every match with the job's real title/description, and the
+    actual AI-optimized resume + cover letter text for matches that have
+    them. Read-only. Built because the ticket backlog was all plumbing —
+    nobody had looked at whether the matches or the AI resumes are good.
+    """
+    _require_admin(token)
+    supabase = get_supabase()
+
+    user_resp = (
+        supabase.table("users")
+        .select(
+            "id, name, email, job_category, experience_level, target_roles, "
+            "skills, tools, summary, resume_text, resume_template, created_at"
+        )
+        .eq("id", user_id)
+        .execute()
+    )
+    if not user_resp.data:
+        raise HTTPException(404, "User not found.")
+    user = user_resp.data[0]
+
+    matches_resp = (
+        supabase.table("user_jobs")
+        .select(
+            "id, match_score, status, digest_date, pdf_url, optimized_resume_text, "
+            "cover_letter_text, jobs(title, company, location, description, source, source_url)"
+        )
+        .eq("user_id", user_id)
+        .order("digest_date", desc=True)
+        .order("match_score", desc=True)
+        .limit(30)
+        .execute()
+    )
+    matches = matches_resp.data or []
+
+    return {
+        "user": user,
+        "matches": [
+            {
+                "id": m["id"],
+                "match_score": m.get("match_score"),
+                "status": m.get("status"),
+                "digest_date": m.get("digest_date"),
+                "pdf_url": m.get("pdf_url"),
+                "job": m.get("jobs") or {},
+                "optimized_resume_text": m.get("optimized_resume_text"),
+                "cover_letter_text": m.get("cover_letter_text"),
+            }
+            for m in matches
+        ],
     }

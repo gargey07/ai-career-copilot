@@ -128,6 +128,98 @@ class OpenAIProvider(AIProvider):
         return response.data[0].embedding
 
 
+# ── Generic OpenAI-compatible chat provider (Groq / OpenRouter / GitHub
+#    Models / Mistral) ─────────────────────────────────────────────────────────
+class _ChatCompletionsProvider(AIProvider):
+    """
+    Groq, OpenRouter, GitHub Models, and Mistral all expose an
+    OpenAI-compatible /chat/completions endpoint — same request/response
+    shape, just a different base_url, api_key, and model name. One class
+    covers all four instead of writing a near-identical SDK wrapper per
+    provider.
+
+    Generation-only: these are fallbacks for generate_text (resume/cover-
+    letter writing) when Gemini rate-limits, not embedding providers —
+    embed_text always stays on Gemini so vectors stay comparable in
+    pgvector against jobs already embedded with Gemini.
+    """
+
+    def __init__(self, name: str, api_key: str, base_url: str, model: str, daily_limit: int):
+        from openai import AsyncOpenAI
+        self.name = name
+        self.model = model
+        self.daily_limit = daily_limit
+        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+
+    async def generate_text(self, prompt: str, temperature: float = 0.3) -> str:
+        if not check_budget(self.name, self.daily_limit):
+            raise BudgetExceededError(f"{self.name} daily budget exhausted")
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+        )
+        return response.choices[0].message.content.strip()
+
+    async def embed_text(self, text: str) -> list[float]:
+        raise NotImplementedError(f"{self.name} is a generate_text-only fallback — embeddings stay on Gemini.")
+
+
+def _build_fallback_providers() -> list[AIProvider]:
+    """
+    Every optional fallback provider whose API key is actually configured,
+    in a fixed priority order. Missing keys are skipped silently — this is
+    how you add/remove a provider from the waterfall without touching code,
+    just by setting or clearing its env var on Render.
+    """
+    candidates = [
+        (settings.groq_api_key, "groq", "https://api.groq.com/openai/v1",
+         settings.groq_model, settings.groq_daily_limit),
+        (settings.openrouter_api_key, "openrouter", "https://openrouter.ai/api/v1",
+         settings.openrouter_model, settings.openrouter_daily_limit),
+        (settings.github_models_token, "github_models", "https://models.github.ai/inference",
+         settings.github_models_model, settings.github_models_daily_limit),
+        (settings.mistral_api_key, "mistral", "https://api.mistral.ai/v1",
+         settings.mistral_model, settings.mistral_daily_limit),
+    ]
+    providers = []
+    for api_key, name, base_url, model, daily_limit in candidates:
+        if api_key:
+            providers.append(_ChatCompletionsProvider(name, api_key, base_url, model, daily_limit))
+            logger.info(f"✅ {name} fallback provider configured (model: {model})")
+    return providers
+
+
+# ── Waterfall ──────────────────────────────────────────────────────────────────
+class WaterfallAIProvider(AIProvider):
+    """
+    Tries Gemini first, then each configured fallback provider in order,
+    for generate_text only. Any failure — rate limit, our own daily budget
+    cap, network error, provider outage — falls through to the next one
+    rather than aborting the whole match. embed_text always goes straight
+    to Gemini; mixing embedding spaces would silently corrupt pgvector
+    similarity search against jobs already embedded with Gemini.
+    """
+
+    def __init__(self, primary: AIProvider, fallbacks: list[AIProvider]):
+        self._primary = primary
+        self._chain = [primary, *fallbacks]
+
+    async def generate_text(self, prompt: str, temperature: float = 0.3) -> str:
+        last_error: Exception | None = None
+        for provider in self._chain:
+            try:
+                return await provider.generate_text(prompt, temperature)
+            except Exception as e:
+                name = getattr(provider, "name", type(provider).__name__)
+                logger.warning(f"⚠️  {name} failed ({e}) — trying next provider in the waterfall")
+                last_error = e
+        raise last_error or RuntimeError("All AI providers in the waterfall failed")
+
+    async def embed_text(self, text: str) -> list[float]:
+        return await self._primary.embed_text(text)
+
+
 # ── Factory ───────────────────────────────────────────────────────────────────
 _provider_instance: Optional[AIProvider] = None
 
@@ -136,12 +228,23 @@ def get_ai_provider() -> AIProvider:
     """
     Returns the configured AI provider as a singleton.
     Provider is set via AI_PROVIDER env var: 'gemini' | 'openai'
+
+    When AI_PROVIDER=gemini (the default), Gemini is wrapped in a waterfall
+    with any of GROQ_API_KEY / OPENROUTER_API_KEY / GITHUB_MODELS_TOKEN /
+    MISTRAL_API_KEY that are configured, plus OpenAI last if its key is set
+    too — so a Gemini rate limit mid-pipeline no longer stalls resume
+    generation for everyone behind it in the queue. AI_PROVIDER=openai opts
+    fully out of Gemini and the waterfall (unchanged behavior).
     """
     global _provider_instance
     if _provider_instance is None:
         provider = settings.ai_provider.lower()
         if provider == "gemini":
-            _provider_instance = GeminiProvider()
+            gemini = GeminiProvider()
+            fallbacks = _build_fallback_providers()
+            if settings.openai_api_key:
+                fallbacks.append(OpenAIProvider())
+            _provider_instance = WaterfallAIProvider(gemini, fallbacks) if fallbacks else gemini
         elif provider == "openai":
             _provider_instance = OpenAIProvider()
         else:

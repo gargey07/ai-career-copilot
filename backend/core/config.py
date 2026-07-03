@@ -62,6 +62,31 @@ class Settings(BaseSettings):
     # shows them yet (admin Inspect only) — keep off until they ship.
     generate_cover_letters: bool = False
 
+    # Text-generation fallback waterfall — used only when AI_PROVIDER=gemini
+    # (the default) and only for generate_text (resume/cover-letter writing).
+    # When Gemini errors or hits its rate limit mid-pipeline, the next
+    # configured provider here is tried automatically. Embeddings always
+    # stay on Gemini regardless — mixing embedding spaces would break
+    # pgvector cosine-similarity against jobs already embedded with Gemini.
+    # Empty key = that provider is skipped in the waterfall (safe to leave
+    # any/all of these blank). All four speak the OpenAI chat-completions
+    # API shape, so no extra SDK is needed beyond the existing `openai` pkg.
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.3-70b-versatile"
+    groq_daily_limit: int = 500
+
+    openrouter_api_key: str = ""
+    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
+    openrouter_daily_limit: int = 50
+
+    github_models_token: str = ""
+    github_models_model: str = "gpt-4o-mini"
+    github_models_daily_limit: int = 60
+
+    mistral_api_key: str = ""
+    mistral_model: str = "mistral-small-latest"
+    mistral_daily_limit: int = 500
+
     # Storage
     r2_account_id: str = ""
     r2_access_key_id: str = ""

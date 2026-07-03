@@ -4,11 +4,17 @@ services:
     runtime: python
     plan: free
     rootDir: backend
-    # Playwright's Chromium renders resume PDFs. `|| true` keeps deploys
-    # green even if the browser download hiccups — PDF generation then
-    # degrades gracefully (matches ship without PDFs) instead of blocking
-    # the whole API deploy.
-    buildCommand: pip install -r requirements.txt && (python -m playwright install chromium || true)
+    # Playwright's Chromium renders resume PDFs. The install is retried once
+    # (transient download hiccups happen on Render's free build machine),
+    # and failure never blocks the deploy — PDF generation then degrades
+    # gracefully (matches ship without PDFs, status='pdf_failed' with a
+    # reason) instead of the whole API failing to boot. But a silent `||
+    # true` on the FIRST attempt meant a failed download here was invisible
+    # until someone found stuck PDFs hours later — this version prints a
+    # loud warning in the build log instead, so a real failure is caught at
+    # deploy time. If you see that warning: Render dashboard → Manual
+    # Deploy → "Clear build cache & deploy" to force a fresh download.
+    buildCommand: pip install -r requirements.txt && (python -m playwright install chromium || python -m playwright install chromium || echo "XXXXX WARNING: Playwright Chromium install failed twice during build. PDF generation WILL fail until the next successful deploy -- see the download error above, then Render dashboard -> Manual Deploy -> 'Clear build cache & deploy'. XXXXX")
     startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:

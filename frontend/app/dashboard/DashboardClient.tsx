@@ -14,6 +14,7 @@ import {
   Clock,
   ThumbsUp,
   ThumbsDown,
+  RefreshCw,
   type LucideIcon,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
@@ -42,6 +43,10 @@ interface UserJob {
   jobs: Job;
   feedback?: string | null;
   feedback_reason?: string | null;
+  // Whether a resume was ever queued for this match at all — distinguishes
+  // "not selected for AI tailoring" (normal — only top matches get one)
+  // from "generation failed" (TICKET-020). See backend/api/routes/users.py.
+  has_optimized_resume?: boolean;
 }
 interface User {
   id: string;
@@ -177,10 +182,59 @@ function ResumeFeedback({ userId, match }: { userId: string; match: UserJob }) {
   );
 }
 
+// ── Retry button for a failed/stuck PDF (TICKET-020) ────────────────────────────
+// Never leave a permanent "Resume generating…" with no way out.
+function RetryPdfButton({ userId, matchId }: { userId: string; matchId: string }) {
+  const [state, setState] = useState<"idle" | "retrying" | "started">("idle");
+
+  const retry = async () => {
+    setState("retrying");
+    try {
+      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${matchId}/retry-pdf`, { method: "POST" });
+      setState(res.ok ? "started" : "idle");
+    } catch {
+      setState("idle");
+    }
+  };
+
+  if (state === "started") {
+    return (
+      <span className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm" style={{ background: "var(--surface-muted)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
+        <Clock size={16} strokeWidth={1.75} />
+        Retrying — refresh in about a minute
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={retry}
+      disabled={state === "retrying"}
+      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-semibold transition hover:bg-[var(--surface-muted)] disabled:opacity-60"
+      style={{ border: "1px solid var(--coral)", color: "var(--coral)" }}
+    >
+      <RefreshCw size={16} strokeWidth={1.75} className={state === "retrying" ? "animate-spin" : ""} />
+      {state === "retrying" ? "Retrying…" : "Resume failed — Retry"}
+    </button>
+  );
+}
+
 // ── Job card ─────────────────────────────────────────────────────────────────────
 function JobCard({ match, index, userId }: { match: UserJob; index: number; userId: string }) {
   const job = match.jobs;
   const hasApply = job.source_url && !job.source_url.includes("example.com");
+
+  // A resume was queued (has_optimized_resume) but never got a pdf_url:
+  // either it's still in the narrow "generating" window (status still
+  // 'resume_ready'), or it's stuck/failed (status moved on — e.g.
+  // 'pdf_failed', or even 'emailed' if the digest went out before a stuck
+  // legacy row got fixed). Treat anything past 'resume_ready' as
+  // retry-eligible rather than enumerating every failure status.
+  const pdfNeverResolved = !!match.has_optimized_resume && !match.pdf_url;
+  const pdfInProgress = pdfNeverResolved && match.status === "resume_ready";
+  const pdfStuckOrFailed = pdfNeverResolved && !pdfInProgress;
+
   return (
     <Card className="p-6 space-y-4 animate-fade-in transition hover:shadow-e2" style={{ animationDelay: `${index * 60}ms` }}>
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -211,12 +265,14 @@ function JobCard({ match, index, userId }: { match: UserJob; index: number; user
             <Download size={16} strokeWidth={1.75} />
             View Tailored Resume
           </a>
-        ) : (
+        ) : pdfStuckOrFailed ? (
+          <RetryPdfButton userId={userId} matchId={match.id} />
+        ) : pdfInProgress ? (
           <span className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm" style={{ background: "var(--surface-muted)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
             <Clock size={16} strokeWidth={1.75} />
             Resume generating…
           </span>
-        )}
+        ) : null}
 
         {hasApply ? (
           <a

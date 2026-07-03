@@ -8,9 +8,10 @@ Flow:
   1. Fetch optimized_resume_text from user_jobs
   2. Parse plain text into structured sections
   3. Render into HTML resume template (Jinja2)
-  4. Playwright renders HTML → PDF
+  4. Playwright renders HTML → PDF (60s timeout, one at a time process-wide)
   5. Upload PDF to Supabase Storage
-  6. Update user_jobs.pdf_url + status = 'pdf_ready'
+  6. Update user_jobs.pdf_url + status = 'pdf_ready' — or, on any failure,
+     status = 'pdf_failed' + pdf_error_message (never left stuck)
 
 Run standalone:
     PYTHONPATH=. python3 core/pdf_generator.py
@@ -36,6 +37,17 @@ settings = get_settings()
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 TMP_DIR = Path(__file__).parent.parent / "tmp"
+
+# A Chromium render that never finishes must not leave a match stuck
+# forever — cap it and always resolve to pdf_ready or pdf_failed.
+PDF_GENERATION_TIMEOUT_SECONDS = 60
+
+# Render's free tier is a single 0.1-CPU / 512MB instance running one
+# uvicorn worker (see render.yaml — no --workers flag). This in-process
+# lock is therefore sufficient (not distributed) to stop the nightly
+# pipeline and an instant-first-match background task from launching two
+# Chromium processes at once and OOM-killing the instance.
+_pdf_lock = asyncio.Lock()
 
 
 # ── Resume Text Parser ────────────────────────────────────────────────────────
@@ -291,11 +303,43 @@ def upload_to_supabase_storage(pdf_path: str, storage_path: str) -> Optional[str
 
 # ── Main Pipeline Function ────────────────────────────────────────────────────
 
+def _resume_is_effectively_empty(sections: dict) -> bool:
+    """
+    TICKET-009 quality check: if the AI returned essentially nothing (every
+    section blank — summary, experience, skills, education), rendering a
+    PDF just produces a broken/blank resume. Catch it before wasting a
+    Chromium render, and surface it as a failure the user can retry.
+    """
+    return not any([
+        (sections.get("summary") or "").strip(),
+        sections.get("experience_blocks") or (sections.get("experience_raw") or "").strip(),
+        sections.get("skills_parsed") or (sections.get("skills_raw") or "").strip(),
+        sections.get("education_blocks") or (sections.get("education_raw") or "").strip(),
+    ])
+
+
+def _mark_pdf_failed(supabase, user_job_id: str, error_message: str) -> None:
+    try:
+        supabase.table("user_jobs").update({
+            "status": "pdf_failed",
+            "pdf_error_message": error_message[:500],
+        }).eq("id", user_job_id).execute()
+    except Exception as e:
+        logger.error(f"   Couldn't record pdf_failed status for {user_job_id} either: {e}")
+
+
 async def generate_pdf_for_match(user_job_id: str) -> Optional[str]:
     """
     Full flow for one matched job:
       fetch data → render HTML → PDF → upload → update DB.
     Returns public PDF URL or None.
+
+    Every failure mode (empty AI output, Chromium crash/timeout, storage
+    upload failure) resolves the match to status='pdf_failed' with a
+    reason in pdf_error_message — never leaves it stuck looking like it's
+    still generating. Not selected for AI treatment at all (no
+    optimized_resume_text yet) is a different, non-error case and leaves
+    the row untouched.
     """
     supabase = get_supabase()
 
@@ -307,11 +351,24 @@ async def generate_pdf_for_match(user_job_id: str) -> Optional[str]:
         .single()
         .execute()
     )
-    if not match_resp.data or not match_resp.data.get("optimized_resume_text"):
-        logger.warning(f"   ⚠️  No resume text for match {user_job_id}")
+    if not match_resp.data:
+        logger.warning(f"   ⚠️  Match {user_job_id} not found")
         return None
 
     match = match_resp.data
+    resume_text = match.get("optimized_resume_text")
+
+    # None = the optimizer never got to this match (not selected for AI
+    # tailoring this cycle — normal, not an error). "" (explicitly empty,
+    # as opposed to missing) means the AI ran but produced nothing — that
+    # IS a failure, distinct from "not attempted", so it must not be
+    # silently swallowed by the same early-return.
+    if resume_text is None:
+        logger.warning(f"   ⚠️  No resume text for match {user_job_id} — not yet selected for AI tailoring, not a failure")
+        return None
+    if not resume_text.strip():
+        _mark_pdf_failed(supabase, user_job_id, "AI-generated resume text was empty — nothing to render.")
+        return None
 
     # Fetch user
     user_resp = (
@@ -343,43 +400,60 @@ async def generate_pdf_for_match(user_job_id: str) -> Optional[str]:
 
     logger.info(f"   📄 Generating PDF: {job.get('title')} @ {job.get('company')}")
 
-    # Render HTML
-    html = render_resume_html(
-        user_name=user.get("name", "Applicant"),
-        user_email=user.get("email", ""),
-        job_title=job.get("title", ""),
-        company=job.get("company", ""),
-        resume_text=match["optimized_resume_text"],
-        template_name=template_name,
-        user_location=user_location,
-    )
-
-    # Write to PDF
     short_id = user_job_id[:8]
     pdf_filename = f"resume_{short_id}.pdf"
     pdf_local_path = str(TMP_DIR / pdf_filename)
 
-    await html_to_pdf(html, pdf_local_path)
-
-    # Upload to Supabase Storage
-    today = date.today().isoformat()
-    storage_path = f"{match['user_id']}/{today}/{pdf_filename}"
-    pdf_url = upload_to_supabase_storage(pdf_local_path, storage_path)
-
-    # Update user_jobs record
-    update = {"status": "pdf_ready"}
-    if pdf_url:
-        update["pdf_url"] = pdf_url
-
-    supabase.table("user_jobs").update(update).eq("id", user_job_id).execute()
-
-    # Cleanup temp file
     try:
-        os.remove(pdf_local_path)
-    except Exception:
-        pass
+        # Non-empty text can still parse down to nothing usable (e.g. junk
+        # section headers with no real content) — catch that too, not just
+        # the literal-empty-string case handled above.
+        sections = parse_resume_sections(resume_text)
+        if _resume_is_effectively_empty(sections):
+            raise ValueError("AI-generated resume text had no usable content.")
 
-    return pdf_url
+        html = render_resume_html(
+            user_name=user.get("name", "Applicant"),
+            user_email=user.get("email", ""),
+            job_title=job.get("title", ""),
+            company=job.get("company", ""),
+            resume_text=resume_text,
+            template_name=template_name,
+            user_location=user_location,
+        )
+
+        async with _pdf_lock:
+            await asyncio.wait_for(html_to_pdf(html, pdf_local_path), timeout=PDF_GENERATION_TIMEOUT_SECONDS)
+
+        today = date.today().isoformat()
+        storage_path = f"{match['user_id']}/{today}/{pdf_filename}"
+        pdf_url = upload_to_supabase_storage(pdf_local_path, storage_path)
+        if not pdf_url:
+            raise RuntimeError("PDF rendered but the upload to storage failed.")
+
+        supabase.table("user_jobs").update({
+            "status": "pdf_ready",
+            "pdf_url": pdf_url,
+            "pdf_error_message": None,
+        }).eq("id", user_job_id).execute()
+        return pdf_url
+
+    except asyncio.TimeoutError:
+        error_message = f"Timed out after {PDF_GENERATION_TIMEOUT_SECONDS}s rendering the PDF."
+        logger.error(f"   ❌ {error_message} (match {user_job_id})")
+        _mark_pdf_failed(supabase, user_job_id, error_message)
+        return None
+    except Exception as e:
+        logger.error(f"   ❌ PDF generation failed for match {user_job_id}: {e}")
+        _mark_pdf_failed(supabase, user_job_id, str(e))
+        return None
+    finally:
+        try:
+            os.remove(pdf_local_path)
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
 
 
 async def run_pdf_generator_for_user(user_id: str) -> int:
@@ -408,16 +482,18 @@ async def run_pdf_generator_for_user(user_id: str) -> int:
     logger.info(f"   Processing {len(matches)} resume(s) for PDF...")
     generated = 0
     for match in matches:
+        # generate_pdf_for_match handles its own failures internally (always
+        # resolves the row to pdf_ready/pdf_failed) — this try/except is
+        # just defense in depth, not the primary error path.
         try:
             url = await generate_pdf_for_match(match["id"])
             if url:
                 logger.info(f"   ✅ PDF ready: {url[:70]}...")
                 generated += 1
             else:
-                logger.warning(f"   ⚠️  PDF generated but no storage URL for {match['id']}")
-                generated += 1  # still count as generated (local)
+                logger.warning(f"   ⚠️  PDF not generated for {match['id']} — check pdf_error_message on the row")
         except Exception as e:
-            logger.error(f"   ❌ PDF failed for match {match['id']}: {e}")
+            logger.error(f"   ❌ Unexpected error generating PDF for match {match['id']}: {e}")
 
     return generated
 

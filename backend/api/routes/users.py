@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 
 from database.supabase_client import get_supabase
@@ -81,9 +81,11 @@ async def get_dashboard(user_id: str):
     full_user = user_resp.data[0]
 
     # feedback/feedback_reason are newer columns — same missing-migration
-    # fallback pattern as the `projects` select above.
+    # fallback pattern as the `projects` select above. optimized_resume_text
+    # is fetched only to derive has_optimized_resume below — the raw text
+    # itself is never shipped to the dashboard (see the transform below).
     jobs_fields = (
-        "id, match_score, pdf_url, digest_date, status, "
+        "id, match_score, pdf_url, digest_date, status, optimized_resume_text, "
         "jobs(id, title, company, location, is_remote, source_url)"
     )
     try:
@@ -103,6 +105,19 @@ async def get_dashboard(user_id: str):
             .execute()
         )
 
+    # has_optimized_resume tells the dashboard whether a resume was ever
+    # queued for this match at all — without it, "no pdf_url yet" is
+    # ambiguous between "not selected for AI tailoring" (normal — only the
+    # top few matches get one) and "generation failed" (the bug this fixes).
+    # Sending the boolean, not the resume text itself, keeps the payload
+    # small and doesn't leak resume content into a page that shows job
+    # postings to whoever holds the dashboard link.
+    jobs = []
+    for row in (jobs_resp.data or []):
+        row = dict(row)
+        row["has_optimized_resume"] = bool(row.pop("optimized_resume_text", None))
+        jobs.append(row)
+
     # Only ship the fields the dashboard needs — the rest stays server-side.
     user = {
         "id": full_user["id"],
@@ -111,7 +126,7 @@ async def get_dashboard(user_id: str):
         "target_roles": full_user.get("target_roles") or [],
         "profile_strength": compute_profile_strength(full_user),
     }
-    return {"user": user, "jobs": jobs_resp.data or []}
+    return {"user": user, "jobs": jobs}
 
 
 @router.post("/{user_id}/matches/{match_id}/feedback")
@@ -143,3 +158,31 @@ async def submit_match_feedback(user_id: str, match_id: str, payload: FeedbackRe
         raise HTTPException(500, "Couldn't save your feedback — try again in a moment.")
 
     return {"status": "ok"}
+
+
+@router.post("/{user_id}/matches/{match_id}/retry-pdf")
+async def retry_pdf(user_id: str, match_id: str, background_tasks: BackgroundTasks):
+    """
+    TICKET-020: the "Retry" button shown when a resume's PDF failed to
+    generate (never leave a permanent 'Resume generating…' with no way
+    out). Verifies ownership first. Re-renders from the already-generated
+    optimized_resume_text — doesn't re-call the AI optimizer, so this is
+    cheap and fixes infra failures (Chromium crash/timeout/upload) without
+    burning another Gemini call.
+    """
+    supabase = get_supabase()
+    owns = (
+        supabase.table("user_jobs")
+        .select("id, optimized_resume_text")
+        .eq("id", match_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not owns.data:
+        raise HTTPException(404, "Match not found.")
+    if not owns.data[0].get("optimized_resume_text"):
+        raise HTTPException(400, "This match doesn't have a tailored resume to render yet.")
+
+    from core.pdf_generator import generate_pdf_for_match
+    background_tasks.add_task(generate_pdf_for_match, match_id)
+    return {"status": "started", "message": "Retrying — this can take up to a minute."}

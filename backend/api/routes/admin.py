@@ -215,7 +215,7 @@ async def inspect_user(user_id: str, token: str = Query(..., description="Admin 
     try:
         matches_resp = (
             supabase.table("user_jobs")
-            .select(f"{match_fields}, feedback, feedback_reason, click_count")
+            .select(f"{match_fields}, feedback, feedback_reason, click_count, pdf_error_message")
             .eq("user_id", user_id)
             .order("digest_date", desc=True)
             .order("match_score", desc=True)
@@ -223,7 +223,7 @@ async def inspect_user(user_id: str, token: str = Query(..., description="Admin 
             .execute()
         )
     except Exception:
-        # feedback/click_count are newer columns — degrade gracefully pre-migration.
+        # feedback/click_count/pdf_error_message are newer columns — degrade gracefully pre-migration.
         matches_resp = (
             supabase.table("user_jobs")
             .select(match_fields)
@@ -250,6 +250,7 @@ async def inspect_user(user_id: str, token: str = Query(..., description="Admin 
                 "feedback": m.get("feedback"),
                 "feedback_reason": m.get("feedback_reason"),
                 "click_count": m.get("click_count") or 0,
+                "pdf_error_message": m.get("pdf_error_message"),
             }
             for m in matches
         ],

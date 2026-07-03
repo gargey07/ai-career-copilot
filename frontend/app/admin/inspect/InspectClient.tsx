@@ -41,6 +41,7 @@ interface Match {
   feedback?: string | null;
   feedback_reason?: string | null;
   click_count?: number;
+  pdf_error_message?: string | null;
 }
 interface InspectUser {
   id: string;
@@ -185,6 +186,11 @@ function InspectContent() {
                       {(m.click_count ?? 0) > 0 && ` · ${m.click_count} apply click${m.click_count === 1 ? "" : "s"}`}
                       {m.feedback && ` · feedback: ${m.feedback}${m.feedback_reason ? ` (${m.feedback_reason.replace(/_/g, " ")})` : ""}`}
                     </div>
+                    {m.pdf_error_message && (
+                      <div className="text-xs mt-1" style={{ color: "var(--coral)" }}>
+                        PDF failed: {m.pdf_error_message}
+                      </div>
+                    )}
                   </div>
                   <div className="flex flex-col items-end gap-1">
                     <ScorePct score={m.match_score} />

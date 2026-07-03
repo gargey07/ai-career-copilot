@@ -122,9 +122,10 @@ CREATE TABLE IF NOT EXISTS user_jobs (
   optimized_resume_text   TEXT,
   cover_letter_text       TEXT,
   pdf_url                 TEXT,                    -- signed URL to PDF in R2/S3
+  pdf_error_message       TEXT,                    -- set (with status='pdf_failed') when PDF generation fails; cleared on success
 
   -- Status tracking
-  status                  TEXT DEFAULT 'matched',  -- 'matched', 'resume_ready', 'emailed', 'applied', 'interviewing', 'offered', 'rejected'
+  status                  TEXT DEFAULT 'matched',  -- 'matched', 'resume_ready', 'pdf_ready', 'pdf_failed', 'emailed', 'applied', 'interviewing', 'offered', 'rejected'
   applied_at              TIMESTAMPTZ,
 
   -- Apply-link click tracking (GET /r/{id} redirect — see
@@ -338,6 +339,7 @@ ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS last_clicked_at   TIMESTAMPTZ;
 ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS feedback          TEXT;
 ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS feedback_reason   TEXT;
 ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS feedback_at       TIMESTAMPTZ;
+ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS pdf_error_message TEXT;
 
 CREATE TABLE IF NOT EXISTS funnel_events (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -181,6 +181,8 @@ def _build_fallback_providers() -> list[AIProvider]:
          settings.github_models_model, settings.github_models_daily_limit),
         (settings.mistral_api_key, "mistral", "https://api.mistral.ai/v1",
          settings.mistral_model, settings.mistral_daily_limit),
+        (settings.cohere_api_key, "cohere", "https://api.cohere.ai/compatibility/v1",
+         settings.cohere_model, settings.cohere_daily_limit),
     ]
     providers = []
     for api_key, name, base_url, model, daily_limit in candidates:
@@ -231,10 +233,11 @@ def get_ai_provider() -> AIProvider:
 
     When AI_PROVIDER=gemini (the default), Gemini is wrapped in a waterfall
     with any of GROQ_API_KEY / OPENROUTER_API_KEY / GITHUB_MODELS_TOKEN /
-    MISTRAL_API_KEY that are configured, plus OpenAI last if its key is set
-    too — so a Gemini rate limit mid-pipeline no longer stalls resume
-    generation for everyone behind it in the queue. AI_PROVIDER=openai opts
-    fully out of Gemini and the waterfall (unchanged behavior).
+    MISTRAL_API_KEY / COHERE_API_KEY that are configured, plus OpenAI last
+    if its key is set too — so a Gemini rate limit mid-pipeline no longer
+    stalls resume generation for everyone behind it in the queue.
+    AI_PROVIDER=openai opts fully out of Gemini and the waterfall
+    (unchanged behavior).
     """
     global _provider_instance
     if _provider_instance is None:

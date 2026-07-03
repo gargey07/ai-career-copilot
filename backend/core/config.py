@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     # stay on Gemini regardless — mixing embedding spaces would break
     # pgvector cosine-similarity against jobs already embedded with Gemini.
     # Empty key = that provider is skipped in the waterfall (safe to leave
-    # any/all of these blank). All four speak the OpenAI chat-completions
+    # any/all of these blank). All five speak the OpenAI chat-completions
     # API shape, so no extra SDK is needed beyond the existing `openai` pkg.
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     mistral_api_key: str = ""
     mistral_model: str = "mistral-small-latest"
     mistral_daily_limit: int = 500
+
+    cohere_api_key: str = ""
+    cohere_model: str = "command-r-plus-08-2024"
+    cohere_daily_limit: int = 500
 
     # Storage
     r2_account_id: str = ""

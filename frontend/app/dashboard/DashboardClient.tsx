@@ -302,9 +302,12 @@ function JobCard({ match, index, userId }: { match: UserJob; index: number; user
 }
 
 // ── Loading skeleton ─────────────────────────────────────────────────────────────
-function DashboardSkeleton() {
+function DashboardSkeleton({ hint }: { hint?: string }) {
   return (
     <div className="max-w-4xl mx-auto px-6 py-10 space-y-8">
+      {hint && (
+        <p className="text-sm text-center" style={{ color: "var(--text-muted)" }}>{hint}</p>
+      )}
       <div className="space-y-3">
         <Skeleton className="h-4 w-48" />
         <Skeleton className="h-10 w-72" />
@@ -319,6 +322,42 @@ function DashboardSkeleton() {
   );
 }
 
+// Render's free tier is a single instance with no redundancy — it can go
+// idle (cold start ~50s) or briefly restart mid-request. A single failed
+// fetch there is not "your profile is broken", it's "the server was
+// asleep" — retry with backoff before showing a hard error. Only retries
+// network-level failures and 5xx (server-side); a 4xx like "profile not
+// found" is a real error and fails immediately.
+const DASHBOARD_RETRY_DELAYS_MS = [0, 5000, 15000, 30000];
+
+async function fetchDashboardWithRetry(
+  userId: string,
+  onAttempt?: (attempt: number, total: number) => void
+): Promise<{ user: User; jobs: UserJob[] }> {
+  let lastError: Error = new Error("Failed to load dashboard.");
+
+  for (let attempt = 0; attempt < DASHBOARD_RETRY_DELAYS_MS.length; attempt++) {
+    if (attempt > 0) {
+      onAttempt?.(attempt, DASHBOARD_RETRY_DELAYS_MS.length);
+      await new Promise((resolve) => setTimeout(resolve, DASHBOARD_RETRY_DELAYS_MS[attempt]));
+    }
+    try {
+      const res = await fetch(`${API_URL}/api/users/${userId}/dashboard`);
+      if (res.ok) {
+        const data = await res.json();
+        return { user: data.user, jobs: (data.jobs as any) || [] };
+      }
+      const body = await res.json().catch(() => ({}));
+      lastError = new Error(body.detail || "Failed to load dashboard.");
+      if (res.status < 500) break; // real error (e.g. 404) — retrying won't help
+    } catch (e: any) {
+      // fetch() threw — network-level failure (server unreachable/restarting)
+      lastError = new Error(e.message || "Failed to load dashboard.");
+    }
+  }
+  throw lastError;
+}
+
 // ── Dashboard Content ──────────────────────────────────────────────────────────
 function DashboardContent() {
   const params = useSearchParams();
@@ -328,6 +367,9 @@ function DashboardContent() {
   const [allJobs, setAllJobs] = useState<UserJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [errorKind, setErrorKind] = useState<"no-profile" | "load-failed">("load-failed");
+  const [retryHint, setRetryHint] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -337,33 +379,43 @@ function DashboardContent() {
     const userId = paramUserId || getStoredProfile()?.id;
     if (!userId) {
       setError("We don't know who you are yet — set up your profile first, or open the dashboard link from your email.");
+      setErrorKind("no-profile");
       setLoading(false);
       return;
     }
 
-    async function load() {
-      try {
-        const res = await fetch(`${API_URL}/api/users/${userId}/dashboard`);
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.detail || "Failed to load dashboard.");
-        }
-        const data = await res.json();
-        setUser(data.user);
-        setAllJobs((data.jobs as any) || []);
-      } catch (e: any) {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    setRetryHint("");
+    fetchDashboardWithRetry(userId, () => {
+      if (!cancelled) setRetryHint("Waking up the server — this can take up to a minute on our free tier.");
+    })
+      .then(({ user, jobs }) => {
+        if (cancelled) return;
+        setUser(user);
+        setAllJobs(jobs);
+      })
+      .catch((e: any) => {
+        if (cancelled) return;
+        // A real "not found" from the backend vs. the server just being
+        // unreachable get different recovery actions below — Render's free
+        // tier restarting mid-request is common enough that "set up your
+        // profile again" would be actively wrong advice here.
+        setErrorKind(/couldn.t find a profile/i.test(e.message) ? "no-profile" : "load-failed");
         setError(e.message || "Failed to load dashboard.");
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, [paramUserId, today]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [paramUserId, today, reloadKey]);
 
   if (loading) {
     return (
       <main className="min-h-screen" style={{ background: "var(--bg)" }}>
-        <DashboardSkeleton />
+        <DashboardSkeleton hint={retryHint} />
       </main>
     );
   }
@@ -376,14 +428,29 @@ function DashboardContent() {
             <AlertTriangle size={24} strokeWidth={1.75} style={{ color: "var(--coral)" }} />
           </div>
           <h2 className="text-xl font-bold mb-2" style={{ color: "var(--text)" }}>Couldn&apos;t load your dashboard</h2>
-          <p className="text-sm mb-5" style={{ color: "var(--text-muted)" }}>{error || "Invalid user ID. Check your link."}</p>
-          <a
-            href="/signup"
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-md text-sm font-semibold text-white transition hover:opacity-90"
-            style={{ background: "var(--primary)" }}
-          >
-            Set up my profile
-          </a>
+          <p className="text-sm mb-5" style={{ color: "var(--text-muted)" }}>
+            {errorKind === "no-profile"
+              ? error || "Invalid user ID. Check your link."
+              : "We couldn't reach the server after a few tries. It may still be waking up — this happens sometimes on our free hosting tier."}
+          </p>
+          {errorKind === "no-profile" ? (
+            <a
+              href="/signup"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-md text-sm font-semibold text-white transition hover:opacity-90"
+              style={{ background: "var(--primary)" }}
+            >
+              Set up my profile
+            </a>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setReloadKey((k) => k + 1)}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-md text-sm font-semibold text-white transition hover:opacity-90"
+              style={{ background: "var(--primary)" }}
+            >
+              Try again
+            </button>
+          )}
         </Card>
       </main>
     );

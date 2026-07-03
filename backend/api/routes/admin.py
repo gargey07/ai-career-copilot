@@ -255,3 +255,53 @@ async def inspect_user(user_id: str, token: str = Query(..., description="Admin 
             for m in matches
         ],
     }
+
+
+# ── Delete user ──────────────────────────────────────────────────────────────
+@router.delete("/users/{user_id}")
+async def delete_user(user_id: str, token: str = Query(..., description="Admin token")):
+    """
+    Founder cleanup tool — mainly for removing test/dummy accounts created
+    while trying the product out. Hard delete: user_jobs cascades via FK
+    (ON DELETE CASCADE in database/schema.sql); email_logs/pipeline_status/
+    funnel_events keep their rows for audit purposes with user_id set to
+    NULL (ON DELETE SET NULL) rather than being wiped. Also best-effort
+    removes their uploaded resume file and generated PDFs from storage —
+    a cleanup failure there is logged but never blocks the actual delete.
+    """
+    _require_admin(token)
+    supabase = get_supabase()
+
+    user_resp = supabase.table("users").select("id, name, email, resume_file_path").eq("id", user_id).execute()
+    if not user_resp.data:
+        raise HTTPException(404, "User not found.")
+    user = user_resp.data[0]
+
+    # Best-effort storage cleanup — private upload + any generated PDFs.
+    try:
+        if user.get("resume_file_path"):
+            supabase.storage.from_("resume-uploads").remove([user["resume_file_path"]])
+    except Exception as e:
+        logger.warning(f"   Couldn't remove resume upload for {user_id}: {e}")
+
+    try:
+        # PDFs are stored nested by date: {user_id}/{date}/{filename}.pdf
+        # (see core/pdf_generator.py) — list one level, then the next, to
+        # build real object paths rather than treating date folders as files.
+        all_paths = []
+        for date_folder in (supabase.storage.from_("resumes").list(user_id) or []):
+            folder_name = date_folder.get("name")
+            if not folder_name:
+                continue
+            for f in (supabase.storage.from_("resumes").list(f"{user_id}/{folder_name}") or []):
+                if f.get("name"):
+                    all_paths.append(f"{user_id}/{folder_name}/{f['name']}")
+        if all_paths:
+            supabase.storage.from_("resumes").remove(all_paths)
+    except Exception as e:
+        logger.warning(f"   Couldn't remove generated PDFs for {user_id}: {e}")
+
+    supabase.table("users").delete().eq("id", user_id).execute()
+    logger.info(f"   🗑️  Deleted user {user_id} ({user.get('email')}) via admin panel")
+
+    return {"status": "deleted", "email": user.get("email")}

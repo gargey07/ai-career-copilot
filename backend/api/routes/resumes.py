@@ -293,11 +293,16 @@ async def get_parse_status(job_id: str):
 async def _match_new_user(user_id: str) -> None:
     """
     Instant first match — a core journey step (docs/PRODUCT_STRATEGY_BETA.md):
-    signup must end with real matches on the dashboard, not "come back
-    tomorrow". Runs after the confirm response is sent; uses the same
-    matcher as the nightly pipeline (vector when available, keyword
-    fallback otherwise). Best-effort: an empty job pool or AI budget cap
-    just means fewer/no matches, never a failed signup.
+    signup must end with real matches AND resumes on the dashboard, not
+    "come back tomorrow". Runs after the confirm response is sent; uses
+    the same matcher as the nightly pipeline (vector when available,
+    keyword fallback otherwise), then immediately tries to generate
+    tailored resumes for the top matches too — previously this only
+    matched jobs, so "Resumes Ready" sat at 0 until the next scheduled
+    pipeline run. No email here (that's still the nightly digest's job;
+    sending one immediately on signup would be a second, redundant send).
+    Best-effort throughout: an empty job pool or AI budget cap just means
+    fewer/no matches or resumes, never a failed signup.
     """
     try:
         from core.matcher import match_jobs_for_user, store_matches
@@ -307,6 +312,15 @@ async def _match_new_user(user_id: str) -> None:
         logger.info(f"⚡ Instant first match for {user_id}: {stored} matches stored")
     except Exception as e:
         logger.warning(f"⚠️  Instant first match failed for {user_id}: {e}")
+        return
+
+    try:
+        from core.pipeline_runner import generate_resumes_for_user
+
+        resume_stats = await generate_resumes_for_user(user_id)
+        logger.info(f"⚡ Instant resume generation for {user_id}: {resume_stats}")
+    except Exception as e:
+        logger.warning(f"⚠️  Instant resume generation failed for {user_id}: {e}")
 
 
 @router.post("/confirm")

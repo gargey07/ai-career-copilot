@@ -68,13 +68,16 @@ def _queries_for_category(category: str) -> list[str]:
     return [category] if category else [""]
 
 
-async def _run_delivery_for_user(user_id: str) -> dict:
+async def generate_resumes_for_user(user_id: str) -> dict:
     """
-    Phase 3 for one user: tailored resumes → PDFs → digest email.
-    Each step is best-effort; a failure downgrades the output, never
-    aborts the pipeline.
+    Optimizer → PDF for one user's already-matched jobs. No email — this
+    is the reusable half of delivery, shared by the full nightly pipeline
+    (which continues on to email) and instant-first-match on signup
+    (which shouldn't send an email, just wants the dashboard populated
+    quickly — see api/routes/resumes.py). Each step is best-effort; a
+    failure downgrades the output, never raises.
     """
-    stats = {"resumes": 0, "pdfs": 0, "emailed": False}
+    stats = {"resumes": 0, "pdfs": 0}
 
     try:
         from core.optimizer import run_optimizer_for_user
@@ -89,6 +92,14 @@ async def _run_delivery_for_user(user_id: str) -> dict:
         # Most common cause: Playwright's Chromium isn't installed on the
         # server (render.yaml build installs it; first deploy may lag).
         logger.warning(f"   PDF generation skipped for {user_id}: {e}")
+
+    return stats
+
+
+async def _run_delivery_for_user(user_id: str) -> dict:
+    """Phase 3 for one user: tailored resumes → PDFs → digest email."""
+    stats = await generate_resumes_for_user(user_id)
+    stats["emailed"] = False
 
     try:
         from core.email_sender import send_morning_digest

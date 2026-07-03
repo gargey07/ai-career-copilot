@@ -13,6 +13,7 @@ import {
   FileText,
   KeyRound,
   MousePointerClick,
+  Trash2,
   type LucideIcon,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
@@ -73,6 +74,50 @@ function StatCard({ icon: Icon, label, value }: { icon: LucideIcon; label: strin
       </div>
       <div className="text-2xl font-extrabold" style={{ color: "var(--text)" }}>{value}</div>
     </Card>
+  );
+}
+
+// Two-click confirm (click once to arm, click again within a few seconds
+// to actually delete) — avoids a native browser confirm() dialog while
+// still making a destructive action require deliberate intent. Mainly
+// for cleaning up test/dummy accounts created while trying the product.
+function DeleteUserButton({ token, userId, email, onDeleted }: { token: string; userId: string; email: string; onDeleted: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    if (!confirming) return;
+    const t = setTimeout(() => setConfirming(false), 4000);
+    return () => clearTimeout(t);
+  }, [confirming]);
+
+  const handleClick = async () => {
+    if (!confirming) {
+      setConfirming(true);
+      return;
+    }
+    setDeleting(true);
+    try {
+      const res = await fetch(`${API_URL}/api/admin/users/${userId}?token=${encodeURIComponent(token)}`, { method: "DELETE" });
+      if (res.ok) onDeleted();
+    } finally {
+      setDeleting(false);
+      setConfirming(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={deleting}
+      title={confirming ? `Click again to permanently delete ${email}` : `Delete ${email}`}
+      className="inline-flex items-center gap-1 text-xs font-medium hover:underline disabled:opacity-60"
+      style={{ color: confirming ? "var(--coral)" : "var(--text-muted)" }}
+    >
+      <Trash2 size={12} strokeWidth={2} />
+      {deleting ? "Deleting…" : confirming ? "Confirm delete?" : "Delete"}
+    </button>
   );
 }
 
@@ -383,6 +428,7 @@ export default function AdminClient() {
                               >
                                 Inspect quality
                               </a>
+                              <DeleteUserButton token={token} userId={u.id} email={u.email} onDeleted={() => load(token)} />
                             </div>
                           </td>
                         </tr>

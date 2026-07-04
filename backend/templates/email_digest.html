@@ -114,7 +114,9 @@
     <div class="intro">
       <div class="intro-greeting">Good morning, {{ user_name }}</div>
       <p class="intro-text">
-        {% if has_resumes %}
+        {% if has_attachments %}
+        These jobs match your profile — your tailored resumes are attached to this email, ready to forward to a recruiter. Pick one and apply.
+        {% elif has_resumes %}
         These jobs match your profile — your top matches include a resume tailored for that exact role. Pick one and apply.
         {% else %}
         These jobs match your profile. Pick one and apply — tailored resumes are on the way.

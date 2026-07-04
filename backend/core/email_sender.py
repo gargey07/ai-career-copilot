@@ -16,13 +16,17 @@ twice in one day, and every attempt lands in email_logs.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
+import re
 import smtplib
 from datetime import date
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
+import httpx
 from jinja2 import Environment, FileSystemLoader
 
 from core.config import get_settings
@@ -35,9 +39,17 @@ settings = get_settings()
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 MAX_JOBS_PER_EMAIL = 5
+# Tailored-resume PDFs get ATTACHED to the digest (not just linked) so the
+# user can forward one straight to a recruiter. Caps keep the message well
+# under provider size limits (Gmail 25MB) and download time bounded.
+MAX_ATTACHMENTS_PER_EMAIL = 3
+MAX_TOTAL_ATTACHMENT_BYTES = 7 * 1024 * 1024
 
 
-def _render_email_html(user_name: str, jobs: list[dict], dashboard_url: str, unsubscribe_url: str) -> str:
+def _render_email_html(
+    user_name: str, jobs: list[dict], dashboard_url: str, unsubscribe_url: str,
+    has_attachments: bool = False,
+) -> str:
     env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
     template = env.get_template("email_digest.html")
     return template.render(
@@ -45,14 +57,52 @@ def _render_email_html(user_name: str, jobs: list[dict], dashboard_url: str, uns
         today=date.today().strftime("%B %d, %Y"),
         jobs=jobs,
         has_resumes=any(j.get("pdf_url") for j in jobs),
+        has_attachments=has_attachments,
         dashboard_url=dashboard_url,
         unsubscribe_url=unsubscribe_url,
     )
 
 
-def _send_via_gmail(to_email: str, subject: str, html: str, unsubscribe_url: str) -> None:
-    """Blocking SMTP send — call through asyncio.to_thread."""
-    msg = MIMEMultipart("alternative")
+def _safe_filename(text: str) -> str:
+    """'UI/UX Designer @ Acme Pvt. Ltd' -> 'UI-UX Designer - Acme Pvt Ltd'."""
+    cleaned = re.sub(r'[\\/:*?"<>|]', '-', text).strip()
+    return re.sub(r'\s+', ' ', cleaned)[:80] or "resume"
+
+
+async def _download_resume_attachments(jobs_data: list[dict]) -> list[tuple[str, bytes]]:
+    """
+    Best-effort download of tailored-resume PDFs to attach to the digest.
+    Any failure just means that resume ships as a link only — never blocks
+    or delays the email itself.
+    """
+    attachments: list[tuple[str, bytes]] = []
+    total = 0
+    async with httpx.AsyncClient(timeout=20) as client:
+        for job in jobs_data:
+            if len(attachments) >= MAX_ATTACHMENTS_PER_EMAIL:
+                break
+            if not job.get("pdf_url"):
+                continue
+            try:
+                resp = await client.get(job["pdf_url"])
+                resp.raise_for_status()
+                content = resp.content
+                if not content or total + len(content) > MAX_TOTAL_ATTACHMENT_BYTES:
+                    continue
+                name = _safe_filename(f"Resume - {job.get('title') or 'Role'} - {job.get('company') or ''}") + ".pdf"
+                attachments.append((name, content))
+                total += len(content)
+            except Exception as e:
+                logger.warning(f"   Couldn't attach resume PDF ({job.get('pdf_url', '')[:60]}): {e}")
+    return attachments
+
+
+def _build_gmail_message(
+    to_email: str, subject: str, html: str, unsubscribe_url: str,
+    attachments: list[tuple[str, bytes]],
+) -> MIMEMultipart:
+    """Pure message assembly — split out so tests can verify attachments."""
+    msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
     msg["From"] = f"{settings.email_from_name} <{settings.gmail_user}>"
     msg["To"] = to_email
@@ -61,18 +111,37 @@ def _send_via_gmail(to_email: str, subject: str, html: str, unsubscribe_url: str
     # the footer link. Costs nothing, meaningfully helps deliverability.
     msg["List-Unsubscribe"] = f"<{unsubscribe_url}>"
     msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
-    msg.attach(MIMEText(html, "html"))
 
+    body = MIMEMultipart("alternative")
+    body.attach(MIMEText(html, "html"))
+    msg.attach(body)
+
+    for filename, content in attachments:
+        part = MIMEApplication(content, _subtype="pdf")
+        part.add_header("Content-Disposition", "attachment", filename=filename)
+        msg.attach(part)
+    return msg
+
+
+def _send_via_gmail(
+    to_email: str, subject: str, html: str, unsubscribe_url: str,
+    attachments: list[tuple[str, bytes]],
+) -> None:
+    """Blocking SMTP send — call through asyncio.to_thread."""
+    msg = _build_gmail_message(to_email, subject, html, unsubscribe_url, attachments)
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as server:
         server.login(settings.gmail_user, settings.gmail_app_password)
         server.sendmail(settings.gmail_user, [to_email], msg.as_string())
 
 
-def _send_via_resend(to_email: str, subject: str, html: str, unsubscribe_url: str) -> None:
+def _send_via_resend(
+    to_email: str, subject: str, html: str, unsubscribe_url: str,
+    attachments: list[tuple[str, bytes]],
+) -> None:
     import resend
 
     resend.api_key = settings.resend_api_key
-    resend.Emails.send({
+    payload = {
         "from": f"{settings.email_from_name} <onboarding@resend.dev>",
         "to": [to_email],
         "subject": subject,
@@ -81,24 +150,34 @@ def _send_via_resend(to_email: str, subject: str, html: str, unsubscribe_url: st
             "List-Unsubscribe": f"<{unsubscribe_url}>",
             "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
         },
-    })
+    }
+    if attachments:
+        payload["attachments"] = [
+            {"filename": name, "content": base64.b64encode(content).decode()}
+            for name, content in attachments
+        ]
+    resend.Emails.send(payload)
 
 
-async def _send_email(to_email: str, subject: str, html: str, unsubscribe_url: str) -> str | None:
+async def _send_email(
+    to_email: str, subject: str, html: str, unsubscribe_url: str,
+    attachments: list[tuple[str, bytes]] | None = None,
+) -> str | None:
     """
     Send through the first configured provider (within budget).
     Returns the provider name used, or None if nothing is configured/available.
     """
+    attachments = attachments or []
     if settings.gmail_user and settings.gmail_app_password:
         if not check_budget("gmail", settings.gmail_daily_limit):
             return None
-        await asyncio.to_thread(_send_via_gmail, to_email, subject, html, unsubscribe_url)
+        await asyncio.to_thread(_send_via_gmail, to_email, subject, html, unsubscribe_url, attachments)
         return "gmail"
 
     if settings.resend_api_key:
         if not check_budget("resend", settings.resend_daily_limit):
             return None
-        await asyncio.to_thread(_send_via_resend, to_email, subject, html, unsubscribe_url)
+        await asyncio.to_thread(_send_via_resend, to_email, subject, html, unsubscribe_url, attachments)
         return "resend"
 
     logger.info("   No email provider configured (set GMAIL_USER + GMAIL_APP_PASSWORD, or RESEND_API_KEY) — skipping email.")
@@ -171,6 +250,14 @@ async def send_morning_digest(user_id: str) -> bool:
         return False
 
     backend = settings.backend_url.rstrip("/")
+
+    def _normalized_score(raw) -> float:
+        # Stored scores exist in two scales: 0–1 (original matcher) and
+        # 0–100 (the replaced match_jobs SQL function) — same fix as the
+        # dashboard, or the email prints things like "7930% match".
+        score = raw or 0.0
+        return min(score / 100.0, 1.0) if score > 1 else score
+
     jobs_data = [
         {
             "title": (m.get("jobs") or {}).get("title"),
@@ -181,17 +268,24 @@ async def send_morning_digest(user_id: str) -> bool:
             # "Apply link click rate" metric) rather than linking straight to the board.
             "apply_redirect_url": f"{backend}/r/{m['id']}",
             "is_remote": (m.get("jobs") or {}).get("is_remote", False),
-            "match_score": m.get("match_score", 0.0),
+            "match_score": _normalized_score(m.get("match_score")),
             "pdf_url": m.get("pdf_url"),
         }
         for m in matches
     ]
 
+    # Attach the tailored-resume PDFs themselves (best-effort) so the user
+    # can forward the email straight to a recruiter without clicking out.
+    attachments = await _download_resume_attachments(jobs_data)
+
     frontend = (settings.frontend_url or "https://ai-career-copilot-taupe-five.vercel.app").rstrip("/")
     dashboard_url = f"{frontend}/dashboard?user_id={user_id}"
     unsubscribe_url = f"{backend}/unsubscribe?token={generate_unsubscribe_token(user_id)}"
     subject = f"Your top {len(jobs_data)} job match{'es' if len(jobs_data) != 1 else ''} — {date.today().strftime('%b %d')}"
-    html = _render_email_html(user.get("name", ""), jobs_data, dashboard_url, unsubscribe_url)
+    html = _render_email_html(
+        user.get("name", ""), jobs_data, dashboard_url, unsubscribe_url,
+        has_attachments=bool(attachments),
+    )
 
     log_row = {
         "user_id": user_id,
@@ -200,7 +294,7 @@ async def send_morning_digest(user_id: str) -> bool:
         "subject": subject,
     }
     try:
-        provider = await _send_email(user["email"], subject, html, unsubscribe_url)
+        provider = await _send_email(user["email"], subject, html, unsubscribe_url, attachments)
         if provider is None:
             return False
 

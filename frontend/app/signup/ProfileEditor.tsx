@@ -362,7 +362,7 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
           Pick how your tailored resumes will look. You can change this anytime.
         </p>
         <TemplatePicker
-          value={profile.resume_template || "modern"}
+          value={profile.resume_template || "professional"}
           onChange={(v) => update("resume_template", v)}
         />
       </SectionCard>

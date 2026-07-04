@@ -458,7 +458,7 @@ async def generate_pdf_for_match(user_job_id: str) -> Optional[str]:
 
     # User-chosen resume design (modern | classic | minimal). Guard against
     # bad/legacy values — a missing template must not kill PDF generation.
-    template_name = user.get("resume_template") or "modern"
+    template_name = user.get("resume_template") or "professional"
     if not (TEMPLATES_DIR / f"resume_{template_name}.html").exists():
         template_name = "modern"
 

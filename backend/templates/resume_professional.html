@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>{{ user_name }} — Resume</title>
+  <style>
+    /* Jake's Resume / LaTeX look: single column, serif, black text,
+       small-caps ruled section headers. Deliberately zero color and zero
+       decoration — the most ATS-parseable and recruiter-familiar layout
+       there is. System serif stack only (no font download at render time). */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: Georgia, 'Times New Roman', 'Latin Modern Roman', serif;
+      font-size: 10pt;
+      color: #111;
+      background: #fff;
+      line-height: 1.4;
+      padding: 34px 44px;
+    }
+
+    /* ── Header ────────────────────────────────────────── */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 4px;
+    }
+    .header-name {
+      font-size: 21pt;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+    .header-role {
+      font-size: 10pt;
+      font-style: italic;
+      color: #333;
+      margin-top: 2px;
+    }
+    .header-contact {
+      text-align: right;
+      font-size: 9pt;
+      color: #222;
+      line-height: 1.5;
+      padding-top: 4px;
+    }
+
+    /* ── Section ───────────────────────────────────────── */
+    .section { margin-top: 14px; }
+    .section-title {
+      font-size: 10.5pt;
+      font-variant: small-caps;
+      letter-spacing: 0.8px;
+      font-weight: 700;
+      border-bottom: 1px solid #111;
+      padding-bottom: 2px;
+      margin-bottom: 7px;
+    }
+
+    .summary-text { font-size: 9.5pt; line-height: 1.5; text-align: justify; }
+
+    /* ── Experience ────────────────────────────────────── */
+    .exp-block { margin-bottom: 9px; }
+    .exp-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    .exp-title { font-size: 10.5pt; font-weight: 700; }
+    .exp-dates { font-size: 9pt; font-style: italic; color: #333; white-space: nowrap; margin-left: 14px; }
+    .exp-company { font-size: 9.5pt; font-style: italic; color: #222; margin-bottom: 3px; }
+    .exp-bullets { list-style: none; margin-top: 2px; }
+    .exp-bullets li {
+      padding-left: 13px;
+      position: relative;
+      font-size: 9.5pt;
+      margin-bottom: 2px;
+      line-height: 1.45;
+    }
+    .exp-bullets li::before {
+      content: '–';
+      position: absolute;
+      left: 2px;
+    }
+
+    /* ── Skills ────────────────────────────────────────── */
+    .skill-row { font-size: 9.5pt; margin-bottom: 4px; line-height: 1.5; padding-left: 13px; position: relative; }
+    .skill-row::before { content: '•'; position: absolute; left: 2px; font-size: 8pt; top: 1px; }
+    .skill-label { font-weight: 700; }
+
+    /* ── Education ─────────────────────────────────────── */
+    .edu-block {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 5px;
+    }
+    .edu-degree { font-size: 10pt; font-weight: 700; }
+    .edu-school { font-size: 9.5pt; font-style: italic; color: #222; }
+    .edu-year { font-size: 9pt; font-style: italic; color: #333; white-space: nowrap; margin-left: 14px; }
+
+    .raw-section { font-size: 9.5pt; line-height: 1.5; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+
+  <!-- Header: name + role left, contact right (Jake's layout) -->
+  <div class="header">
+    <div>
+      <div class="header-name">{{ user_name }}</div>
+      {% if target_role %}<div class="header-role">{{ target_role }}</div>{% endif %}
+    </div>
+    <div class="header-contact">
+      {% if user_email %}{{ user_email }}<br/>{% endif %}
+      {% if user_location %}{{ user_location }}{% endif %}
+    </div>
+  </div>
+
+  {% if summary %}
+  <div class="section">
+    <div class="section-title">Summary</div>
+    <div class="summary-text">{{ summary }}</div>
+  </div>
+  {% endif %}
+
+  {% if experience_blocks %}
+  <div class="section">
+    <div class="section-title">Experience</div>
+    {% for block in experience_blocks %}
+    <div class="exp-block">
+      <div class="exp-header">
+        <span class="exp-title">{{ block.title }}</span>
+        {% if block.dates %}<span class="exp-dates">{{ block.dates }}</span>{% endif %}
+      </div>
+      {% if block.company %}<div class="exp-company">{{ block.company }}</div>{% endif %}
+      {% if block.bullets %}
+      <ul class="exp-bullets">
+        {% for bullet in block.bullets %}
+        <li>{{ bullet }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% elif experience_raw %}
+  <div class="section">
+    <div class="section-title">Experience</div>
+    <div class="raw-section">{{ experience_raw }}</div>
+  </div>
+  {% endif %}
+
+  {% if skills_parsed %}
+  <div class="section">
+    <div class="section-title">Technical Skills</div>
+    {% for row in skills_parsed %}
+    <div class="skill-row">
+      {% if row.label %}<span class="skill-label">{{ row.label }}:</span>{% endif %}
+      {{ row.value }}
+    </div>
+    {% endfor %}
+  </div>
+  {% elif skills_raw %}
+  <div class="section">
+    <div class="section-title">Technical Skills</div>
+    <div class="raw-section">{{ skills_raw }}</div>
+  </div>
+  {% endif %}
+
+  {% if education_blocks %}
+  <div class="section">
+    <div class="section-title">Education</div>
+    {% for edu in education_blocks %}
+    <div class="edu-block">
+      <span>
+        <span class="edu-degree">{{ edu.degree }}</span>
+        {% if edu.school %}<span class="edu-school"> — {{ edu.school }}</span>{% endif %}
+      </span>
+      {% if edu.year %}<span class="edu-year">{{ edu.year }}</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% elif education_raw %}
+  <div class="section">
+    <div class="section-title">Education</div>
+    <div class="raw-section">{{ education_raw }}</div>
+  </div>
+  {% endif %}
+
+</body>
+</html>

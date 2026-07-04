@@ -8,6 +8,11 @@ import { Check } from "lucide-react";
 
 export const TEMPLATE_OPTIONS = [
   {
+    value: "professional",
+    label: "Professional",
+    desc: "The classic single-column format recruiters know best. Most ATS-friendly.",
+  },
+  {
     value: "modern",
     label: "Modern",
     desc: "Bold dark header. Stands out in creative & tech roles.",
@@ -81,7 +86,34 @@ function MinimalPreview() {
   );
 }
 
+function ProfessionalPreview() {
+  // Jake's-Resume look: name left + contact right, small-caps ruled sections.
+  return (
+    <div className="w-full h-full flex flex-col overflow-hidden rounded px-2 py-2" style={{ background: "#fff" }}>
+      <div className="flex justify-between items-start mb-1.5">
+        <Line w="40%" c="#111" h={5} />
+        <div className="space-y-1 flex flex-col items-end" style={{ width: "30%" }}>
+          <Line w="100%" c="#94A3B8" h={2} />
+          <Line w="70%" c="#94A3B8" h={2} />
+        </div>
+      </div>
+      <div className="space-y-1.5 flex-1">
+        <div className="pb-0.5" style={{ borderBottom: "1px solid #111", width: "100%" }}>
+          <Line w="28%" c="#111" />
+        </div>
+        <Line w="92%" />
+        <Line w="85%" />
+        <div className="pb-0.5 pt-0.5" style={{ borderBottom: "1px solid #111", width: "100%" }}>
+          <Line w="32%" c="#111" />
+        </div>
+        <Line w="88%" />
+      </div>
+    </div>
+  );
+}
+
 const PREVIEWS: Record<string, () => JSX.Element> = {
+  professional: ProfessionalPreview,
   modern: ModernPreview,
   classic: ClassicPreview,
   minimal: MinimalPreview,
@@ -94,7 +126,7 @@ interface TemplatePickerProps {
 
 export default function TemplatePicker({ value, onChange }: TemplatePickerProps) {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
       {TEMPLATE_OPTIONS.map((opt) => {
         const active = value === opt.value;
         const Preview = PREVIEWS[opt.value];

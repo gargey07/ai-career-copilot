@@ -63,7 +63,10 @@ interface InspectData {
 }
 
 function ScorePct({ score }: { score: number }) {
-  const pct = Math.round((score || 0) * 100);
+  // Scores exist in two scales (0–1 original, 0–100 from the replaced
+  // match_jobs SQL function) — treat >1 as already-a-percentage.
+  const raw = score || 0;
+  const pct = Math.min(100, Math.round(raw <= 1 ? raw * 100 : raw));
   const color = pct >= 80 ? "var(--success)" : pct >= 60 ? "var(--primary)" : "var(--accent)";
   return (
     <span className="text-sm font-bold tabular-nums" style={{ color }}>

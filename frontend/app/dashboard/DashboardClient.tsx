@@ -68,9 +68,17 @@ const FEEDBACK_REASONS: { value: string; label: string }[] = [
   { value: "other", label: "Other" },
 ];
 
+// Stored match scores exist in two scales: 0–1 (original matcher) and 0–100
+// (the replaced match_jobs SQL function returns percentages directly). Treat
+// anything > 1 as already-a-percentage — without this, 79.3 renders as 7930%.
+export function normalizeScorePct(score: number): number {
+  const pct = score <= 1 ? score * 100 : score;
+  return Math.min(100, Math.max(0, Math.round(pct)));
+}
+
 // ── Score badge (CSS dot, no emoji) ─────────────────────────────────────────────
 function ScoreBadge({ score }: { score: number }) {
-  const pct = Math.round(score * 100);
+  const pct = normalizeScorePct(score);
   const cls = pct >= 85 ? "badge-green" : pct >= 70 ? "badge-yellow" : "badge-orange";
   const dot = pct >= 85 ? "#0F9D8C" : pct >= 70 ? "#F59E0B" : "#F97316";
   return (
@@ -82,15 +90,45 @@ function ScoreBadge({ score }: { score: number }) {
 }
 
 // ── Stat card ────────────────────────────────────────────────────────────────────
-function StatCard({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string | number }) {
-  return (
-    <Card className="p-5">
+function StatCard({
+  icon: Icon,
+  label,
+  value,
+  onClick,
+  active,
+  hint,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string | number;
+  onClick?: () => void;
+  active?: boolean;
+  hint?: string;
+}) {
+  const body = (
+    <Card
+      className={`p-5 h-full ${onClick ? "transition-shadow hover:shadow-md" : ""}`}
+      style={active ? { borderColor: "var(--primary)", boxShadow: "0 0 0 1px var(--primary)" } : undefined}
+    >
       <div className="flex items-center gap-2 mb-2">
         <Icon size={18} strokeWidth={1.75} style={{ color: "var(--primary)" }} />
         <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>{label}</span>
       </div>
-      <div className="text-2xl font-extrabold" style={{ color: "var(--text)" }}>{value}</div>
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="text-2xl font-extrabold" style={{ color: "var(--text)" }}>{value}</div>
+        {onClick && (
+          <span className="text-xs font-medium" style={{ color: "var(--primary)" }}>
+            {active ? "Clear" : hint || "View"}
+          </span>
+        )}
+      </div>
     </Card>
+  );
+  if (!onClick) return body;
+  return (
+    <button type="button" onClick={onClick} className="text-left w-full cursor-pointer" aria-pressed={active}>
+      {body}
+    </button>
   );
 }
 
@@ -436,6 +474,12 @@ function DashboardContent() {
   const [errorKind, setErrorKind] = useState<"no-profile" | "load-failed">("load-failed");
   const [retryHint, setRetryHint] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
+  // Clicking the "Resumes Ready" stat card filters the whole page down to
+  // matches with a finished PDF; clicking again clears it.
+  const [showOnlyReady, setShowOnlyReady] = useState(false);
+  // Today's list is capped by default — pipeline re-runs in a single day
+  // can pile up dozens of matches and bury the page.
+  const [showAllToday, setShowAllToday] = useState(false);
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -525,8 +569,18 @@ function DashboardContent() {
   const firstName = user.name?.split(" ")[0] || "there";
   const todayMatches = allJobs.filter((j) => j.digest_date === today);
   const jobsFound = todayMatches.length;
-  const resumesReady = todayMatches.filter((m) => m.pdf_url).length;
-  const bestMatch = todayMatches.length ? Math.round(Math.max(...todayMatches.map((m) => m.match_score)) * 100) : 0;
+  // Ready resumes stay useful across days — count (and filter) all of them,
+  // not just today's.
+  const readyMatches = allJobs
+    .filter((m) => m.pdf_url)
+    .sort((a, b) => (b.match_score || 0) - (a.match_score || 0));
+  const resumesReady = readyMatches.length;
+  const bestMatch = todayMatches.length ? Math.max(...todayMatches.map((m) => normalizeScorePct(m.match_score))) : 0;
+
+  // Multiple pipeline runs in one day can pile up dozens of "today"
+  // matches — show the top few by default, with an explicit expander.
+  const TODAY_DISPLAY_CAP = 10;
+  const todayDisplayed = showAllToday ? todayMatches : todayMatches.slice(0, TODAY_DISPLAY_CAP);
   // Last day we actually delivered matches — a real, verifiable metric
   // (strategy rule: never display applications/interviews/offers until we
   // can verify them).
@@ -584,9 +638,15 @@ function DashboardContent() {
         </div>
 
         {/* Stat cards — all real, verifiable numbers */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6 animate-fade-in">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6 animate-fade-in">
           <StatCard icon={Briefcase} label="Jobs Found" value={jobsFound} />
-          <StatCard icon={FileText} label="Resumes Ready" value={resumesReady} />
+          <StatCard
+            icon={FileText}
+            label="Resumes Ready"
+            value={resumesReady}
+            onClick={resumesReady > 0 ? () => setShowOnlyReady((v) => !v) : undefined}
+            active={showOnlyReady}
+          />
           <StatCard icon={Target} label="Best Match" value={`${bestMatch}%`} />
           <Card className="p-5">
             <div className="flex items-center gap-2 mb-2">
@@ -606,68 +666,99 @@ function DashboardContent() {
           </Card>
         </div>
 
-        {/* Pipeline status — only real, verifiable info (see product strategy:
-            no Applications/Interviews/Offers until we can actually track them). */}
-        <Card className="p-5 mb-10 animate-fade-in">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-md shrink-0" style={{ background: "var(--surface-muted)" }}>
-              <Clock size={18} strokeWidth={1.75} style={{ color: "var(--text-muted)" }} />
-            </div>
-            <div>
-              <div className="text-sm font-semibold" style={{ color: "var(--text)" }}>
-                {lastMatchDate ? `Last matches delivered ${lastMatchDate === today ? "today" : `on ${lastMatchDate}`}` : "No matches delivered yet"}
+        {/* Delivery status + digest-time picker together at the TOP — the
+            picker was previously buried below every job card, so users only
+            discovered their delivery time after scrolling the whole page. */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10 animate-fade-in">
+          <Card className="p-5">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-md shrink-0" style={{ background: "var(--surface-muted)" }}>
+                <Clock size={18} strokeWidth={1.75} style={{ color: "var(--text-muted)" }} />
               </div>
-              <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                {allJobs.length > 0
-                  ? `${allJobs.length} match${allJobs.length > 1 ? "es" : ""} delivered in total`
-                  : "Matching runs after signup and every morning after that"}
+              <div>
+                <div className="text-sm font-semibold" style={{ color: "var(--text)" }}>
+                  {lastMatchDate ? `Last matches delivered ${lastMatchDate === today ? "today" : `on ${lastMatchDate}`}` : "No matches delivered yet"}
+                </div>
+                <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  {allJobs.length > 0
+                    ? `${allJobs.length} match${allJobs.length > 1 ? "es" : ""} delivered in total`
+                    : "Matching runs after signup and every morning after that"}
+                </div>
               </div>
             </div>
-          </div>
-        </Card>
-
-        {/* Today's jobs */}
-        <h2 className="text-lg font-semibold mb-4" style={{ color: "var(--text)" }}>Today&apos;s matches</h2>
-        {todayMatches.length > 0 ? (
-          <div className="space-y-4">
-            {todayMatches.map((m, i) => <JobCard key={m.id} match={m} index={i} userId={user.id} />)}
-          </div>
-        ) : historyDates.length > 0 ? (
-          // No new matches today but there's history below — a slim note
-          // beats a big empty card that pushes real content off-screen.
-          <p className="text-sm mb-2" style={{ color: "var(--text-muted)" }}>
-            No new matches yet today — new jobs arrive every morning. Your earlier matches are below.
-          </p>
-        ) : (
-          <Card>
-            <EmptyState
-              icon={Clock}
-              title="No matches yet today"
-              description="Your first matches are usually ready within a few minutes of signing up — try refreshing. After that, new matches arrive every morning."
-            />
           </Card>
-        )}
-
-        {/* Previous days, one section per date, most recent first */}
-        {historyDates.map((d) => (
-          <div key={d} className="mt-10">
-            <h2 className="text-lg font-semibold mb-4" style={{ color: "var(--text)" }}>{historyLabel(d)}</h2>
-            <div className="space-y-4">
-              {(historyByDate.get(d) || []).map((m, i) => (
-                <JobCard key={m.id} match={m} index={i} userId={user.id} />
-              ))}
-            </div>
-          </div>
-        ))}
-
-        {/* T-012: Settings panel */}
-        <div className="mt-12 space-y-4">
-          <h2 className="text-sm font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Preferences</h2>
-          <DigestTimePicker
-            userId={user.id}
-            currentTime={user.preferred_digest_time}
-          />
+          <DigestTimePicker userId={user.id} currentTime={user.preferred_digest_time} />
         </div>
+
+        {showOnlyReady ? (
+          <>
+            {/* Filtered view: only matches with a finished tailored resume */}
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold" style={{ color: "var(--text)" }}>
+                Resumes ready ({resumesReady})
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShowOnlyReady(false)}
+                className="text-sm font-medium hover:underline"
+                style={{ color: "var(--primary)" }}
+              >
+                Show all matches
+              </button>
+            </div>
+            <div className="space-y-4">
+              {readyMatches.map((m, i) => <JobCard key={m.id} match={m} index={i} userId={user.id} />)}
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Today's jobs */}
+            <h2 className="text-lg font-semibold mb-4" style={{ color: "var(--text)" }}>Today&apos;s matches</h2>
+            {todayMatches.length > 0 ? (
+              <div className="space-y-4">
+                {todayDisplayed.map((m, i) => <JobCard key={m.id} match={m} index={i} userId={user.id} />)}
+                {todayMatches.length > TODAY_DISPLAY_CAP && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllToday((v) => !v)}
+                    className="w-full py-3 rounded-lg text-sm font-medium border transition-colors hover:border-[var(--primary)]"
+                    style={{ borderColor: "var(--border)", color: "var(--primary)" }}
+                  >
+                    {showAllToday
+                      ? "Show fewer"
+                      : `Show all ${todayMatches.length} matches from today`}
+                  </button>
+                )}
+              </div>
+            ) : historyDates.length > 0 ? (
+              // No new matches today but there's history below — a slim note
+              // beats a big empty card that pushes real content off-screen.
+              <p className="text-sm mb-2" style={{ color: "var(--text-muted)" }}>
+                No new matches yet today — new jobs arrive every morning. Your earlier matches are below.
+              </p>
+            ) : (
+              <Card>
+                <EmptyState
+                  icon={Clock}
+                  title="No matches yet today"
+                  description="Your first matches are usually ready within a few minutes of signing up — try refreshing. After that, new matches arrive every morning."
+                />
+              </Card>
+            )}
+
+            {/* Previous days, one section per date, most recent first */}
+            {historyDates.map((d) => (
+              <div key={d} className="mt-10">
+                <h2 className="text-lg font-semibold mb-4" style={{ color: "var(--text)" }}>{historyLabel(d)}</h2>
+                <div className="space-y-4">
+                  {(historyByDate.get(d) || []).map((m, i) => (
+                    <JobCard key={m.id} match={m} index={i} userId={user.id} />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </>
+        )}
 
         <div className="mt-12 text-center text-sm" style={{ color: "var(--text-muted)" }}>
           <p>New matches every morning</p>

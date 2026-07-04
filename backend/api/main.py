@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -58,14 +59,58 @@ async def _ensure_chromium_installed() -> None:
         logger.error(f"❌ Startup Chromium install crashed: {e}")
 
 
+# ── Daily pipeline scheduler ─────────────────────────────────────────────────
+# Users are in India; DIGEST_TIME ("07:00") is interpreted as IST.
+IST = timezone(timedelta(hours=5, minutes=30))
+_SCHEDULER_POLL_SECONDS = 300
+
+
+async def _daily_pipeline_scheduler() -> None:
+    """
+    Runs the full pipeline (fetch → match → resumes → PDFs → digest emails)
+    once per day at/after DIGEST_TIME IST, with no external cron needed —
+    GitHub's scheduled workflows proved unreliable (measured firing every
+    1-3 hours on a */10 schedule) and asking the founder to click "Run
+    pipeline now" every morning doesn't scale past day one.
+
+    Once-per-day enforcement rides on the existing usage-guard table:
+    check_budget("daily_pipeline", 1) consumes the single daily slot in the
+    DB, so restarts/redeploys can't double-run it. If the instance is
+    asleep at DIGEST_TIME (keep-warm gap), the run simply fires on the next
+    wake-up — the condition is "past digest time and not yet run today",
+    not an exact-minute match. Manual admin "Run pipeline now" stays
+    independent of this slot (idempotent stages make an extra run safe).
+    """
+    from core.usage_guard import check_budget
+    from core.pipeline_runner import run_fetch_and_match
+
+    while True:
+        try:
+            now_ist = datetime.now(IST).strftime("%H:%M")
+            if now_ist >= settings.digest_time and check_budget("daily_pipeline", 1):
+                logger.info("⏰ Daily pipeline scheduler: starting today's automatic run")
+                stats = await run_fetch_and_match()
+                logger.info(f"⏰ Daily pipeline scheduler: done — {stats}")
+        except Exception as e:
+            logger.error(f"❌ Daily pipeline scheduler error: {e}", exc_info=True)
+        await asyncio.sleep(_SCHEDULER_POLL_SECONDS)
+
+
 # ── App Lifespan ─────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Runs on startup and shutdown."""
     logger.info(f"🚀 AI Career Copilot API starting — env: {settings.app_env}")
     chromium_task = asyncio.create_task(_ensure_chromium_installed())
+    # Auto-pipeline only in production — a local dev boot must not consume
+    # the day's pipeline slot or hammer job APIs.
+    scheduler_task = (
+        asyncio.create_task(_daily_pipeline_scheduler()) if settings.is_production else None
+    )
     yield
     chromium_task.cancel()
+    if scheduler_task:
+        scheduler_task.cancel()
     logger.info("👋 AI Career Copilot API shutting down")
 
 

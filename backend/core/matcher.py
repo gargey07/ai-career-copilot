@@ -211,10 +211,17 @@ async def store_matches(user_id: str, matched_jobs: list[dict]) -> int:
 
     rows = []
     for rank, job in enumerate(matched_jobs, start=1):
+        # The replaced match_jobs SQL function (migration_v2_1.sql) returns
+        # percentage scores (0–100) while everything else here uses 0–1 —
+        # normalize so stored scores are always 0–1 regardless of which
+        # version of the function the database has.
+        score = job.get("match_score", 0.0) or 0.0
+        if score > 1:
+            score = score / 100.0
         rows.append({
             "user_id": user_id,
             "job_id": job["id"],
-            "match_score": round(job.get("match_score", 0.0), 4),
+            "match_score": round(min(score, 1.0), 4),
             "rank": rank,
             "digest_date": today,
             "status": "matched",

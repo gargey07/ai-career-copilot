@@ -52,13 +52,65 @@ _pdf_lock = asyncio.Lock()
 
 # ── Resume Text Parser ────────────────────────────────────────────────────────
 
+# The AI is told never to write placeholder dates, but older stored resumes
+# (and occasional model slips) contain literal "( - )" / "(-)" artifacts
+# where the original resume had no dates. Strip them rather than printing
+# them on the final PDF.
+_EMPTY_PARENS_RE = re.compile(r'\(\s*[-–—]?\s*\)')
+
+
+def _strip_empty_parens(text: str) -> str:
+    return _EMPTY_PARENS_RE.sub('', text).strip()
+
+
+def _parse_pipe_experience(lines: list[str]) -> list[dict]:
+    """
+    Parse the strict pipe format the optimizer prompt now requests:
+        Job Title | Company | Dates
+        - bullet
+    Returns [] if no pipe headers found (caller falls back to heuristics).
+    """
+    blocks: list[dict] = []
+    current: Optional[dict] = None
+    for line in lines:
+        line = _strip_empty_parens(line.strip())
+        if not line:
+            continue
+        if "|" in line and not line.startswith(("-", "•", "▸", "*")):
+            if current:
+                blocks.append(current)
+            parts = [p.strip() for p in line.split("|")]
+            current = {
+                "title": parts[0] if parts else "",
+                "company": parts[1] if len(parts) > 1 else "",
+                "dates": parts[2] if len(parts) > 2 else "",
+                "bullets": [],
+            }
+        elif line.startswith(("-", "•", "▸", "*")) and current:
+            bullet = re.sub(r'^[-•▸\*]\s*', '', line).strip()
+            if bullet:
+                current["bullets"].append(bullet)
+        elif current and not current["bullets"] and not current["company"]:
+            current["company"] = line
+    if current:
+        blocks.append(current)
+    return blocks if any(b["title"] for b in blocks) else []
+
+
 def _parse_experience_blocks(lines: list[str]) -> list[dict]:
     """Parse experience section lines into structured blocks."""
+    # Strict pipe format first (what the optimizer prompt now requests) —
+    # far more reliable than the header-shape heuristics below, which
+    # mis-split titles/companies on free-form AI output.
+    pipe_blocks = _parse_pipe_experience(lines)
+    if pipe_blocks:
+        return pipe_blocks
+
     blocks = []
     current: Optional[dict] = None
 
     for line in lines:
-        line = line.strip()
+        line = _strip_empty_parens(line.strip())
         if not line:
             continue
 
@@ -104,7 +156,12 @@ def _parse_skills(lines: list[str]) -> list[dict]:
         line = line.strip()
         if ":" in line:
             label, _, value = line.partition(":")
-            parsed.append({"label": label.strip(), "value": value.strip()})
+            label, value = label.strip(), value.strip()
+            # A line starting with ":" produces an empty label and rendered
+            # as a dangling "‌: Figma, ..." on the PDF — treat as unlabeled.
+            if not value:
+                label, value = "", label
+            parsed.append({"label": label, "value": value})
         elif line:
             parsed.append({"label": "", "value": line})
     return parsed
@@ -115,8 +172,19 @@ def _parse_education_blocks(lines: list[str]) -> list[dict]:
     blocks = []
     i = 0
     while i < len(lines):
-        line = lines[i].strip()
+        line = _strip_empty_parens(lines[i].strip())
         if not line:
+            i += 1
+            continue
+
+        # Strict pipe format first: "Degree | School | Year"
+        if "|" in line:
+            parts = [p.strip() for p in line.split("|")]
+            blocks.append({
+                "degree": parts[0] if parts else "",
+                "school": parts[1] if len(parts) > 1 else "",
+                "year": parts[2] if len(parts) > 2 else "",
+            })
             i += 1
             continue
 
@@ -129,6 +197,12 @@ def _parse_education_blocks(lines: list[str]) -> list[dict]:
         parts = re.split(r'\s*[—–-]{1,2}\s*', clean, maxsplit=1)
         degree = parts[0].strip()
         school = parts[1].strip() if len(parts) > 1 else ""
+
+        # Free-form AI output sometimes duplicates the degree into the
+        # school half ("M. UI/UX Design — UI/UX Design") — drop the echo
+        # when the "school" is really just (part of) the degree again.
+        if school and school.lower() in degree.lower():
+            school = ""
 
         blocks.append({"degree": degree, "school": school, "year": year})
         i += 1

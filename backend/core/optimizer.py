@@ -61,18 +61,25 @@ SKILLS THAT MATCH THIS JOB WELL:
 
 ---
 
-OUTPUT FORMAT (plain text, no markdown):
+OUTPUT FORMAT (plain text, no markdown). Follow this structure EXACTLY —
+every experience and education entry starts with ONE header line using
+" | " separators. If a date or year is missing in the original resume,
+leave that field empty; NEVER write placeholders like "( - )" or "N/A".
+
 SUMMARY
-[rewritten summary]
+[rewritten 3-4 line summary]
 
 PROFESSIONAL EXPERIENCE
-[experience bullets with job-relevant keywords]
+[Job Title] | [Company] | [Dates if known]
+- [achievement bullet with job-relevant keywords]
+- [achievement bullet]
 
 SKILLS
-[expanded skills reordered by relevance to this job]
+Tools: [comma-separated, most job-relevant first]
+Skills: [comma-separated, most job-relevant first]
 
 EDUCATION
-[education as-is]
+[Degree] | [School] | [Year if known]
 """
 
 COVER_LETTER_PROMPT = """

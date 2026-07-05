@@ -367,6 +367,26 @@ async def store_jobs(jobs: list[dict]) -> int:
         logger.info(f"✅ Stored {count} new jobs (out of {len(jobs)} fetched)")
         return count
     except Exception as e:
+        # search_category is a newer column (core/matcher.py's category
+        # gate) — a database that hasn't run the migration yet must not
+        # lose every fetched job over it. Strip the key and retry once
+        # rather than raising outright; matcher.py's text-based fallback
+        # still works fine on untagged rows.
+        if any("search_category" in j for j in jobs):
+            logger.warning(f"⚠️  Upsert with search_category failed ({e}) — retrying without it.")
+            stripped = [{k: v for k, v in j.items() if k != "search_category"} for j in jobs]
+            try:
+                response = (
+                    supabase.table("jobs")
+                    .upsert(stripped, on_conflict="source_url", ignore_duplicates=True)
+                    .execute()
+                )
+                count = len(response.data) if response.data else 0
+                logger.info(f"✅ Stored {count} new jobs without search_category (out of {len(jobs)} fetched)")
+                return count
+            except Exception as e2:
+                logger.error(f"❌ Failed to store jobs even without search_category: {e2}")
+                raise
         logger.error(f"❌ Failed to store jobs: {e}")
         raise
 

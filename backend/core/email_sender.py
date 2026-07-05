@@ -40,9 +40,10 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-class _IPv4SMTPSSL(smtplib.SMTP_SSL):
+def _ipv4_connect(host: str, port: int, timeout) -> socket.socket:
     """
-    Same as smtplib.SMTP_SSL, but resolves the host to an IPv4 address only.
+    Connect a raw TCP socket to host:port using IPv4 only. Shared by both
+    the implicit-TLS (465) and STARTTLS (587) Gmail transports below.
 
     Render's free-tier containers occasionally get an IPv6 address back for
     smtp.gmail.com with no real IPv6 route out of the sandbox, surfacing as
@@ -51,29 +52,47 @@ class _IPv4SMTPSSL(smtplib.SMTP_SSL):
     connection. Forcing AF_INET sidesteps it outright instead of hoping the
     next DNS answer is IPv4.
     """
+    last_error: OSError | None = None
+    for family, socktype, proto, _canonname, sockaddr in socket.getaddrinfo(
+        host, port, socket.AF_INET, socket.SOCK_STREAM
+    ):
+        try:
+            raw_sock = socket.socket(family, socktype, proto)
+            if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                raw_sock.settimeout(timeout)
+            raw_sock.connect(sockaddr)
+            return raw_sock
+        except OSError as e:
+            last_error = e
+    raise last_error or OSError(f"No IPv4 address resolved for {host}")
+
+
+class _IPv4SMTPSSL(smtplib.SMTP_SSL):
+    """smtplib.SMTP_SSL (port 465, implicit TLS), IPv4-only — see _ipv4_connect."""
 
     def _get_socket(self, host, port, timeout):
         if self.debuglevel > 0:
             self._print_debug('connect:', (host, port))
-        last_error: OSError | None = None
-        raw_sock = None
-        for family, socktype, proto, _canonname, sockaddr in socket.getaddrinfo(
-            host, port, socket.AF_INET, socket.SOCK_STREAM
-        ):
-            try:
-                raw_sock = socket.socket(family, socktype, proto)
-                if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
-                    raw_sock.settimeout(timeout)
-                raw_sock.connect(sockaddr)
-                break
-            except OSError as e:
-                last_error = e
-                if raw_sock is not None:
-                    raw_sock.close()
-                raw_sock = None
-        if raw_sock is None:
-            raise last_error or OSError(f"No IPv4 address resolved for {host}")
+        raw_sock = _ipv4_connect(host, port, timeout)
         return self.context.wrap_socket(raw_sock, server_hostname=self._host)
+
+
+class _IPv4SMTP(smtplib.SMTP):
+    """
+    Plain smtplib.SMTP (port 587, STARTTLS), IPv4-only — see _ipv4_connect.
+
+    Fallback transport for when port 465 itself is blocked rather than just
+    an IPv6-routing quirk: some hosts restrict outbound 465 specifically
+    (a common free-tier anti-spam measure) while leaving 587 open. Gmail's
+    "[Errno 101] Network unreachable" / connection-timeout failures
+    persisting in production even after forcing IPv4 on port 465 pointed at
+    exactly this — a port-level block, not an address-family one.
+    """
+
+    def _get_socket(self, host, port, timeout):
+        if self.debuglevel > 0:
+            self._print_debug('connect:', (host, port))
+        return _ipv4_connect(host, port, timeout)
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 MAX_JOBS_PER_EMAIL = 5
@@ -165,9 +184,27 @@ def _send_via_gmail(
     to_email: str, subject: str, html: str, unsubscribe_url: str,
     attachments: list[tuple[str, bytes]],
 ) -> None:
-    """Blocking SMTP send — call through asyncio.to_thread."""
+    """
+    Blocking SMTP send — call through asyncio.to_thread. Tries port 465
+    (implicit TLS) first, then falls back to 587 (STARTTLS) before giving
+    up: some hosts block 465 specifically (a common free-tier anti-spam
+    measure) while leaving 587 open, which is otherwise indistinguishable
+    from a generic transient network error at the _send_email retry layer.
+    """
     msg = _build_gmail_message(to_email, subject, html, unsubscribe_url, attachments)
-    with _IPv4SMTPSSL("smtp.gmail.com", 465, timeout=30) as server:
+
+    try:
+        with _IPv4SMTPSSL("smtp.gmail.com", 465, timeout=20) as server:
+            server.login(settings.gmail_user, settings.gmail_app_password)
+            server.sendmail(settings.gmail_user, [to_email], msg.as_string())
+        return
+    except Exception as e:
+        logger.warning(f"   Gmail port 465 failed ({e}) — trying port 587 (STARTTLS)")
+
+    with _IPv4SMTP("smtp.gmail.com", 587, timeout=20) as server:
+        server.ehlo()
+        server.starttls()
+        server.ehlo()
         server.login(settings.gmail_user, settings.gmail_app_password)
         server.sendmail(settings.gmail_user, [to_email], msg.as_string())
 

@@ -298,6 +298,7 @@ async def store_matches(user_id: str, matched_jobs: list[dict]) -> int:
     today = date.today().isoformat()
 
     rows = []
+    fresh_job_ids: set[str] = set()
     for rank, job in enumerate(matched_jobs, start=1):
         # The replaced match_jobs SQL function (migration_v2_1.sql) returns
         # percentage scores (0–100) while everything else here uses 0–1 —
@@ -306,6 +307,7 @@ async def store_matches(user_id: str, matched_jobs: list[dict]) -> int:
         score = job.get("match_score", 0.0) or 0.0
         if score > 1:
             score = score / 100.0
+        fresh_job_ids.add(job["id"])
         rows.append({
             "user_id": user_id,
             "job_id": job["id"],
@@ -317,6 +319,32 @@ async def store_matches(user_id: str, matched_jobs: list[dict]) -> int:
 
     if not rows:
         return 0
+
+    # A same-day re-run (e.g. after fixing a matching bug like the
+    # cross-category one) computes a fresh ranking, but the upsert below
+    # uses ignore_duplicates=True — it only ADDS rows, it never removes
+    # ones from the previous ranking that fell out. Without this, a stale
+    # wrong match from an earlier run today would sit in the digest forever
+    # alongside the new correct ones, and re-running the pipeline could
+    # never actually fix it. Safe to clean up: only rows still in the raw
+    # 'matched' state (no resume/PDF/feedback/email progress) are removed —
+    # anything a user has already seen or the pipeline has already worked
+    # on is left untouched.
+    try:
+        stale_resp = (
+            supabase.table("user_jobs")
+            .select("id, job_id")
+            .eq("user_id", user_id)
+            .eq("digest_date", today)
+            .eq("status", "matched")
+            .execute()
+        )
+        stale_ids = [r["id"] for r in (stale_resp.data or []) if r.get("job_id") not in fresh_job_ids]
+        if stale_ids:
+            supabase.table("user_jobs").delete().in_("id", stale_ids).execute()
+            logger.info(f"   Removed {len(stale_ids)} stale unprogressed match(es) for {user_id} (today, no longer in the fresh ranking)")
+    except Exception as e:
+        logger.warning(f"   Couldn't clean stale matches for {user_id} ({e}) — continuing anyway.")
 
     try:
         resp = (

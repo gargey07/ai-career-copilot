@@ -5,8 +5,9 @@ Sends the daily digest with the user's top matches. Provider order:
 
 1. Gmail SMTP (GMAIL_USER + GMAIL_APP_PASSWORD) — the beta default; works
    with a plain Gmail account + app password, no domain verification.
-2. Resend (RESEND_API_KEY) — used if Gmail isn't configured. Note: Resend's
-   free tier only delivers to your own address until a domain is verified.
+2. Resend (RESEND_API_KEY) — tried whenever Gmail fails or isn't
+   configured, not only when Gmail is absent. Note: Resend's free tier
+   only delivers to your own address until a domain is verified.
 
 Honest by design (docs/PRODUCT_STRATEGY_BETA.md): the digest sends the top
 matches we actually have — with tailored-resume links when PDFs exist, and
@@ -20,6 +21,7 @@ import base64
 import logging
 import re
 import smtplib
+import socket
 from datetime import date
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
@@ -36,6 +38,42 @@ from database.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+class _IPv4SMTPSSL(smtplib.SMTP_SSL):
+    """
+    Same as smtplib.SMTP_SSL, but resolves the host to an IPv4 address only.
+
+    Render's free-tier containers occasionally get an IPv6 address back for
+    smtp.gmail.com with no real IPv6 route out of the sandbox, surfacing as
+    "[Errno 101] Network unreachable" — intermittent by nature since it
+    depends on which address the resolver happens to hand back on a given
+    connection. Forcing AF_INET sidesteps it outright instead of hoping the
+    next DNS answer is IPv4.
+    """
+
+    def _get_socket(self, host, port, timeout):
+        if self.debuglevel > 0:
+            self._print_debug('connect:', (host, port))
+        last_error: OSError | None = None
+        raw_sock = None
+        for family, socktype, proto, _canonname, sockaddr in socket.getaddrinfo(
+            host, port, socket.AF_INET, socket.SOCK_STREAM
+        ):
+            try:
+                raw_sock = socket.socket(family, socktype, proto)
+                if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                    raw_sock.settimeout(timeout)
+                raw_sock.connect(sockaddr)
+                break
+            except OSError as e:
+                last_error = e
+                if raw_sock is not None:
+                    raw_sock.close()
+                raw_sock = None
+        if raw_sock is None:
+            raise last_error or OSError(f"No IPv4 address resolved for {host}")
+        return self.context.wrap_socket(raw_sock, server_hostname=self._host)
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 MAX_JOBS_PER_EMAIL = 5
@@ -129,7 +167,7 @@ def _send_via_gmail(
 ) -> None:
     """Blocking SMTP send — call through asyncio.to_thread."""
     msg = _build_gmail_message(to_email, subject, html, unsubscribe_url, attachments)
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as server:
+    with _IPv4SMTPSSL("smtp.gmail.com", 465, timeout=30) as server:
         server.login(settings.gmail_user, settings.gmail_app_password)
         server.sendmail(settings.gmail_user, [to_email], msg.as_string())
 
@@ -164,23 +202,54 @@ async def _send_email(
     attachments: list[tuple[str, bytes]] | None = None,
 ) -> str | None:
     """
-    Send through the first configured provider (within budget).
-    Returns the provider name used, or None if nothing is configured/available.
+    Try each configured provider in order until one succeeds — true
+    failover, not "use Resend only if Gmail isn't configured" (the old
+    behavior meant a Gmail outage sent nothing at all, even with a working
+    Resend key). Gmail gets one retry after a short pause on a transient
+    network error (matches the intermittent "Network unreachable" seen in
+    production) before falling through.
+
+    Raises the last error only if at least one configured provider was
+    actually attempted and every attempt failed — a provider that's simply
+    unconfigured, or whose own daily budget is already used up, is skipped
+    silently and isn't itself a failure. Returns None only when nothing
+    was configured or every configured provider is over budget (not an
+    error — the caller doesn't log this to email_logs, same as before).
     """
     attachments = attachments or []
+    attempted = False
+    last_error: Exception | None = None
+
     if settings.gmail_user and settings.gmail_app_password:
-        if not check_budget("gmail", settings.gmail_daily_limit):
-            return None
-        await asyncio.to_thread(_send_via_gmail, to_email, subject, html, unsubscribe_url, attachments)
-        return "gmail"
+        if check_budget("gmail", settings.gmail_daily_limit):
+            for attempt in range(2):
+                attempted = True
+                try:
+                    await asyncio.to_thread(_send_via_gmail, to_email, subject, html, unsubscribe_url, attachments)
+                    return "gmail"
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"   Gmail send failed (attempt {attempt + 1}/2): {e}")
+                    if attempt == 0 and isinstance(e, OSError):
+                        await asyncio.sleep(2)
+                        continue
+                    break
 
     if settings.resend_api_key:
-        if not check_budget("resend", settings.resend_daily_limit):
-            return None
-        await asyncio.to_thread(_send_via_resend, to_email, subject, html, unsubscribe_url, attachments)
-        return "resend"
+        if check_budget("resend", settings.resend_daily_limit):
+            attempted = True
+            try:
+                await asyncio.to_thread(_send_via_resend, to_email, subject, html, unsubscribe_url, attachments)
+                return "resend"
+            except Exception as e:
+                last_error = e
+                logger.warning(f"   Resend send failed: {e}")
 
-    logger.info("   No email provider configured (set GMAIL_USER + GMAIL_APP_PASSWORD, or RESEND_API_KEY) — skipping email.")
+    if attempted and last_error is not None:
+        raise last_error
+
+    if not attempted:
+        logger.info("   No email provider configured, or all configured providers are over today's budget — skipping email.")
     return None
 
 
@@ -310,6 +379,14 @@ async def send_morning_digest(user_id: str) -> bool:
             supabase.table("email_logs").insert({**log_row, "status": "failed", "error_message": str(e)}).execute()
         except Exception:
             pass
+        try:
+            from core.pipeline_runner import send_admin_alert
+            await send_admin_alert(
+                "Digest email failed",
+                f"send_morning_digest failed for {user['email']} (user {user_id}):\n\n{e!r}",
+            )
+        except Exception:
+            pass  # alerting must never take the pipeline down with it
         return False
 
 

@@ -145,6 +145,44 @@ async def _scheduler_tick() -> None:
                 f"Delivery for user {user['id']} (slot {_user_slot(user)}) crashed:\n\n{e!r}",
             )
 
+    # Same-day retry: the per-user delivery day-lock above only runs once,
+    # so a digest email that failed (e.g. a transient provider outage) would
+    # otherwise stay dead until tomorrow even though the resume/PDF already
+    # exist. Re-attempt just the email step for anyone whose latest attempt
+    # today failed, capped at 3 tries/user/day so a persistent outage can't
+    # retry forever. send_morning_digest handles its own failure logging and
+    # admin alert internally.
+    from datetime import date as _date
+    try:
+        logs_resp = (
+            supabase.table("email_logs")
+            .select("user_id, status, sent_at")
+            .eq("type", "morning_digest")
+            .gte("sent_at", _date.today().isoformat())
+            .order("sent_at", desc=True)
+            .execute()
+        )
+        latest_status: dict[str, str] = {}
+        for row in logs_resp.data or []:
+            uid = row.get("user_id")
+            if uid and uid not in latest_status:
+                latest_status[uid] = row.get("status")
+        retry_candidates = [uid for uid, status in latest_status.items() if status == "failed"]
+    except Exception as e:
+        logger.warning(f"   Couldn't check email_logs for digest retry candidates: {e}")
+        retry_candidates = []
+
+    if retry_candidates:
+        from core.email_sender import send_morning_digest
+        for uid in retry_candidates:
+            if not check_budget(f"digest_retry_{uid}", 3):
+                continue
+            logger.info(f"⏰ Scheduler: retrying failed digest for user {uid}")
+            try:
+                await send_morning_digest(uid)
+            except Exception as e:
+                logger.error(f"❌ Digest retry crashed for {uid}: {e}", exc_info=True)
+
 
 async def _daily_pipeline_scheduler() -> None:
     """

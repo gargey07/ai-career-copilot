@@ -24,6 +24,7 @@ Run standalone to test:
 from __future__ import annotations
 import asyncio
 import logging
+import re
 from datetime import date
 
 from core.ai import get_ai_provider
@@ -32,6 +33,63 @@ from database.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+def _tokenize(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9+#.]+", str(text or "").lower()))
+
+
+def _user_terms(user: dict) -> set[str]:
+    """Broad term set (roles + skills + tools + category) used for keyword
+    SCORING — how well a job's text matches this user, once it's already
+    known to be in the right profession."""
+    terms: set[str] = set()
+    for field in ("target_roles", "skills", "tools"):
+        for value in (user.get(field) or []):
+            terms |= {w for w in _tokenize(value) if len(w) >= 2}
+    terms |= {w for w in _tokenize(str(user.get("job_category") or "").replace("_", " ")) if len(w) >= 2}
+    return terms
+
+
+def _category_terms(user: dict) -> set[str]:
+    """Narrower term set (category + target roles ONLY, no skills/tools)
+    used for category RELEVANCE gating — deliberately excludes skills/
+    tools because those are too generic and are exactly why a Fullstack
+    Developer's "javascript"/"api" skills could loosely match a UI/UX
+    Designer job description under the broader _user_terms set."""
+    terms: set[str] = set()
+    terms |= {w for w in _tokenize(str(user.get("job_category") or "").replace("_", " ")) if len(w) >= 2}
+    for role in (user.get("target_roles") or []):
+        terms |= {w for w in _tokenize(role) if len(w) >= 2}
+    return terms
+
+
+def _category_relevant(job: dict, user_category: str, category_terms: set[str]) -> bool:
+    """
+    True when `job` belongs to the user's profession. Prefers the exact
+    search_category tag stamped at fetch time (jobs/fetchers.py); jobs
+    fetched before that column existed, or returned by the vector-search
+    RPC (which doesn't carry the tag), fall back to a text check — at
+    least one category/target-role term in the title, or two in the
+    description — rather than being silently excluded or blindly included.
+    """
+    tag = job.get("search_category")
+    if tag:
+        return tag == user_category
+    if not category_terms:
+        return True  # nothing to check against — don't blanket-exclude
+    title_words = _tokenize(job.get("title", ""))
+    if category_terms & title_words:
+        return True
+    desc_words = _tokenize(job.get("description", ""))
+    return len(category_terms & desc_words) >= 2
+
+
+# Even a category-relevant keyword match can be pure noise (one incidental
+# term overlap) — this is the formula's floor for hits >= 1, so 0.55
+# meaningfully drops the weakest matches instead of padding the digest
+# with them.
+MIN_KEYWORD_SCORE = 0.55
 
 
 async def embed_user_profile(user: dict) -> list[float]:
@@ -139,10 +197,40 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
         matched = supabase.rpc("match_jobs", {"query_embedding": user_embedding, "match_count": overfetch}).execute()
         jobs = matched.data or []
         if jobs:
-            fresh_jobs = _prioritize_fresh(jobs, seen, limit)
-            logger.info(f"   Found {len(jobs)} candidates (vector), {len(fresh_jobs)} after freshness filter")
-            return fresh_jobs
-        logger.info("   Vector match returned nothing — falling back to keyword match")
+            # The match_jobs SQL function's fixed column list doesn't
+            # include search_category, so a high cosine-similarity score
+            # alone can still be the wrong profession entirely (e.g. a
+            # UI/UX Designer job scoring 74% for a Fullstack Developer).
+            # Batch-fetch the tag for these candidates and filter by it.
+            user_category = (user.get("job_category") or "").strip()
+            category_terms = _category_terms(user)
+            job_ids = [j["id"] for j in jobs if j.get("id")]
+            cat_by_id: dict[str, str | None] = {}
+            if job_ids:
+                try:
+                    cat_resp = supabase.table("jobs").select("id, search_category").in_("id", job_ids).execute()
+                    cat_by_id = {row["id"]: row.get("search_category") for row in (cat_resp.data or [])}
+                except Exception as e:
+                    logger.warning(f"   Couldn't load search_category for candidates ({e}) — skipping category filter this run.")
+                    cat_by_id = None  # signals "don't filter" below
+
+            if cat_by_id is not None:
+                for j in jobs:
+                    j["search_category"] = cat_by_id.get(j.get("id"))
+                relevant = [j for j in jobs if _category_relevant(j, user_category, category_terms)]
+            else:
+                relevant = jobs
+
+            if relevant:
+                fresh_jobs = _prioritize_fresh(relevant, seen, limit)
+                logger.info(
+                    f"   Found {len(jobs)} candidates (vector), {len(relevant)} category-relevant, "
+                    f"{len(fresh_jobs)} after freshness filter"
+                )
+                return fresh_jobs
+            logger.info("   Vector match had candidates but none were category-relevant — falling back to keyword match")
+        else:
+            logger.info("   Vector match returned nothing — falling back to keyword match")
     except Exception as e:
         logger.warning(f"⚠️  Vector matching unavailable ({e}) — falling back to keyword match")
 
@@ -163,42 +251,42 @@ def keyword_match(user: dict, jobs: list[dict], limit: int, seen: dict[str, str]
     job's title + description. Pure text — no embeddings, no AI. Used when vector
     matching isn't available. Returns the top `limit` jobs with a match_score,
     preferring ones the user hasn't seen before (see _prioritize_fresh).
+
+    Category relevance is enforced BEFORE any scoring or backfill — a job
+    must belong to the user's profession (via _category_relevant) to be a
+    candidate at all. This is what stops a generic skill term ("figma",
+    "javascript") from loosely matching a job in a completely different
+    field: an honestly small (or empty) digest beats a padded wrong-
+    category one.
     """
-    import re as _re
-
     seen = seen or {}
-    terms: set[str] = set()
-    for field in ("target_roles", "skills", "tools"):
-        for value in (user.get(field) or []):
-            for word in _re.findall(r"[a-z0-9+#.]+", str(value).lower()):
-                if len(word) >= 2:
-                    terms.add(word)
-    for word in _re.findall(r"[a-z0-9+#.]+", str(user.get("job_category") or "").replace("_", " ").lower()):
-        if len(word) >= 2:
-            terms.add(word)
+    user_category = (user.get("job_category") or "").strip()
+    candidates = [j for j in jobs if _category_relevant(j, user_category, _category_terms(user))]
 
+    terms = _user_terms(user)
     if not terms:
-        # Nothing to match on — surface the freshest jobs so the dashboard isn't empty.
-        return _prioritize_fresh([{**job, "match_score": 0.3} for job in jobs], seen, limit)
-
-    def words(text: str) -> set[str]:
-        return set(_re.findall(r"[a-z0-9+#.]+", str(text).lower()))
+        # Nothing to score on — still only from in-category candidates.
+        return _prioritize_fresh([{**job, "match_score": 0.3} for job in candidates], seen, limit)
 
     scored: list[dict] = []
-    for job in jobs:
-        title_words = words(job.get("title", ""))
-        body_words = title_words | words(job.get("description", ""))
+    for job in candidates:
+        title_words = _tokenize(job.get("title", ""))
+        body_words = title_words | _tokenize(job.get("description", ""))
         # Whole-word matching (avoids "design" matching "designer", etc.).
         hits = sum(1 for t in terms if t in body_words)
         if hits:
             title_hits = sum(1 for t in terms if t in title_words)
             raw = (hits + title_hits * 2) / (len(terms) + 2)
-            scored.append({**job, "match_score": round(min(0.98, 0.5 + raw), 4)})
+            score = round(min(0.98, 0.5 + raw), 4)
+            if score >= MIN_KEYWORD_SCORE:
+                scored.append({**job, "match_score": score})
 
     scored.sort(key=lambda j: j["match_score"], reverse=True)
     if scored:
         return _prioritize_fresh(scored, seen, limit)
-    return _prioritize_fresh([{**job, "match_score": 0.3} for job in jobs], seen, limit)
+    # No genuine keyword overlap even within category — still don't reach
+    # outside it for filler.
+    return _prioritize_fresh([{**job, "match_score": 0.3} for job in candidates], seen, limit)
 
 
 async def store_matches(user_id: str, matched_jobs: list[dict]) -> int:

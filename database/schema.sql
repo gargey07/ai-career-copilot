@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   employment_type     TEXT,                        -- 'full-time', 'part-time', 'contract', 'internship'
   seniority_level     TEXT,                        -- 'entry', 'mid', 'senior', 'lead'
   is_remote           BOOLEAN DEFAULT FALSE,
+  search_category     TEXT,                        -- job_category this was fetched for (core/matcher.py category gate)
 
   -- Contact / apply info
   company_email       TEXT,
@@ -340,6 +341,13 @@ ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS feedback          TEXT;
 ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS feedback_reason   TEXT;
 ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS feedback_at       TIMESTAMPTZ;
 ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS pdf_error_message TEXT;
+
+-- Which job_category a job was fetched for — core/matcher.py uses this to
+-- stop cross-category matches (e.g. a UI/UX Designer job being shown to a
+-- Fullstack Developer with a plausible-looking score). Existing rows stay
+-- NULL until re-fetched; matcher.py falls back to a text-based relevance
+-- check for those.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS search_category TEXT;
 
 CREATE TABLE IF NOT EXISTS funnel_events (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),

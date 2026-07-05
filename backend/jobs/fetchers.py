@@ -372,8 +372,19 @@ async def store_jobs(jobs: list[dict]) -> int:
 
 
 # ── Main Runner ───────────────────────────────────────────────────────────────
-async def run_all_fetchers(query: str = "") -> int:
-    """Run all fetchers and store results. Returns total new jobs stored."""
+async def run_all_fetchers(query: str = "", category: str = "") -> int:
+    """
+    Run all fetchers and store results. Returns total new jobs stored.
+
+    `category` (the user job_category this query was built for, e.g.
+    'fullstack_developer') is stamped onto every job as search_category —
+    core/matcher.py uses this tag to stop a job from one profession being
+    matched to a user in a completely different one, regardless of how
+    high its similarity/keyword score happens to come out. Jobs upserted
+    on a source_url that already exists keep their original tag (upsert
+    with ignore_duplicates=True never overwrites), which is fine — the
+    tag only needs to be right the first time a job is ever stored.
+    """
     logger.info(f"🔍 Starting job fetch for query: '{query}'")
 
     adzuna = AdzunaFetcher()
@@ -406,6 +417,10 @@ async def run_all_fetchers(query: str = "") -> int:
         f"{len(remotive_jobs)} Remotive + {len(greenhouse_jobs)} Greenhouse + "
         f"{len(jobicy_jobs)} Jobicy)"
     )
+
+    if category:
+        for job in all_jobs:
+            job["search_category"] = category
 
     return await store_jobs(all_jobs)
 

@@ -143,9 +143,9 @@ async def run_fetch_and_match_jobs_only() -> dict:
 
     total_fetched = 0
     for category in categories:
-        for query in _queries_for_category(category)[:1]:  # one query per category to stay light
+        for query in _queries_for_category(category)[: settings.fetch_queries_per_category]:
             try:
-                total_fetched += await run_all_fetchers(query=query)
+                total_fetched += await run_all_fetchers(query=query, category=category)
             except Exception as e:
                 logger.error(f"   Fetch failed for '{category}' / '{query}': {e}")
 

@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     digest_time: str = "07:00"
     max_jobs_per_user: int = 10
     ai_jobs_per_user: int = 3
+    # Each active category gets this many distinct search queries per fetch
+    # run (was hardcoded to 1) — a deeper per-category pool means fewer
+    # "no relevant jobs today" digests now that matching enforces category
+    # relevance instead of padding with other categories' jobs.
+    fetch_queries_per_category: int = 2
 
     # Supabase
     supabase_url: str = ""

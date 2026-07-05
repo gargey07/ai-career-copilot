@@ -38,6 +38,8 @@ async def _run_and_log() -> None:
         logger.info(f"✅ Manual pipeline run complete: {stats}")
     except Exception as e:
         logger.error(f"❌ Manual pipeline run failed: {e}", exc_info=True)
+        from core.pipeline_runner import send_admin_alert
+        await send_admin_alert("Manual pipeline run failed", f"The admin-triggered pipeline run crashed:\n\n{e!r}")
 
 
 @router.post("/run-pipeline")
@@ -174,6 +176,32 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
     except Exception:
         pass
 
+    # Recent email sends — did each user's digest actually go out?
+    # (T-015). email_logs predates most features, but degrade anyway.
+    email_by_user = {u["id"]: u.get("email") for u in users}
+    email_history = []
+    try:
+        logs_resp = (
+            supabase.table("email_logs")
+            .select("user_id, email_address, type, status, subject, error_message, sent_at")
+            .order("sent_at", desc=True)
+            .limit(50)
+            .execute()
+        )
+        email_history = [
+            {
+                "user_email": row.get("email_address") or email_by_user.get(row.get("user_id"), ""),
+                "type": row.get("type"),
+                "status": row.get("status"),
+                "subject": row.get("subject"),
+                "error_message": row.get("error_message"),
+                "sent_at": row.get("sent_at"),
+            }
+            for row in (logs_resp.data or [])
+        ]
+    except Exception:
+        pass
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "usage_date": today,
@@ -187,6 +215,7 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
         "funnel": funnel,
         "api_usage": api_usage,
         "users": user_rows,
+        "email_history": email_history,
     }
 
 

@@ -14,6 +14,7 @@ import {
   KeyRound,
   MousePointerClick,
   Trash2,
+  Mail,
   type LucideIcon,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
@@ -53,6 +54,14 @@ interface Funnel {
   profile_review_reached: number;
   signup_completed: number;
 }
+interface EmailLogRow {
+  user_email: string;
+  type: string;
+  status: string;
+  subject: string | null;
+  error_message: string | null;
+  sent_at: string | null;
+}
 interface Overview {
   generated_at: string;
   usage_date: string;
@@ -60,6 +69,7 @@ interface Overview {
   funnel: Funnel;
   api_usage: ApiUsageRow[];
   users: AdminUserRow[];
+  email_history?: EmailLogRow[];
 }
 
 const TOKEN_KEY = "acc:admin_token";
@@ -430,6 +440,53 @@ export default function AdminClient() {
                               </a>
                               <DeleteUserButton token={token} userId={u.id} email={u.email} onDeleted={() => load(token)} />
                             </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </SectionCard>
+
+            {/* Email history — did each digest actually go out? (T-015) */}
+            <SectionCard icon={Mail} title="Recent emails">
+              {!overview.email_history || overview.email_history.length === 0 ? (
+                <EmptyState
+                  icon={Mail}
+                  title="No emails logged yet"
+                  description="Every digest attempt (sent or failed) will appear here."
+                />
+              ) : (
+                <div className="overflow-x-auto -mx-2">
+                  <table className="w-full text-sm" style={{ minWidth: 640 }}>
+                    <thead>
+                      <tr className="text-left text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+                        <th className="px-2 py-2 font-semibold">Sent at</th>
+                        <th className="px-2 py-2 font-semibold">To</th>
+                        <th className="px-2 py-2 font-semibold">Type</th>
+                        <th className="px-2 py-2 font-semibold">Status</th>
+                        <th className="px-2 py-2 font-semibold">Detail</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {overview.email_history.map((row, i) => (
+                        <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
+                          <td className="px-2 py-2.5 text-xs whitespace-nowrap" style={{ color: "var(--text-muted)" }}>
+                            {row.sent_at ? new Date(row.sent_at).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}
+                          </td>
+                          <td className="px-2 py-2.5 text-xs" style={{ color: "var(--text)" }}>{row.user_email}</td>
+                          <td className="px-2 py-2.5 text-xs" style={{ color: "var(--text-muted)" }}>{row.type?.replace(/_/g, " ")}</td>
+                          <td className="px-2 py-2.5">
+                            <span
+                              className="text-xs font-semibold"
+                              style={{ color: row.status === "sent" ? "var(--success)" : "var(--coral)" }}
+                            >
+                              {row.status}
+                            </span>
+                          </td>
+                          <td className="px-2 py-2.5 text-xs" style={{ color: "var(--text-muted)" }}>
+                            {row.status === "sent" ? row.subject : row.error_message || "—"}
                           </td>
                         </tr>
                       ))}

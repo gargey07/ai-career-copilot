@@ -195,17 +195,18 @@ def _build_fallback_providers() -> list[AIProvider]:
 # ── Waterfall ──────────────────────────────────────────────────────────────────
 class WaterfallAIProvider(AIProvider):
     """
-    Tries Gemini first, then each configured fallback provider in order,
-    for generate_text only. Any failure — rate limit, our own daily budget
-    cap, network error, provider outage — falls through to the next one
-    rather than aborting the whole match. embed_text always goes straight
-    to Gemini; mixing embedding spaces would silently corrupt pgvector
-    similarity search against jobs already embedded with Gemini.
+    Tries each provider in `fallbacks` order for generate_text. Any failure
+    — rate limit, our own daily budget cap, network error, provider outage —
+    falls through to the next one rather than aborting the whole match.
+    embed_text always goes straight to `primary` (Gemini); mixing embedding
+    spaces would silently corrupt pgvector similarity search against jobs
+    already embedded with Gemini, and Gemini's embedding quota is separate
+    from its (tiny, 20/day) generation quota.
     """
 
-    def __init__(self, primary: AIProvider, fallbacks: list[AIProvider]):
-        self._primary = primary
-        self._chain = [primary, *fallbacks]
+    def __init__(self, embedder: AIProvider, chain: list[AIProvider]):
+        self._primary = embedder
+        self._chain = chain
 
     async def generate_text(self, prompt: str, temperature: float = 0.3) -> str:
         last_error: Exception | None = None
@@ -231,23 +232,27 @@ def get_ai_provider() -> AIProvider:
     Returns the configured AI provider as a singleton.
     Provider is set via AI_PROVIDER env var: 'gemini' | 'openai'
 
-    When AI_PROVIDER=gemini (the default), Gemini is wrapped in a waterfall
-    with any of GROQ_API_KEY / OPENROUTER_API_KEY / GITHUB_MODELS_TOKEN /
-    MISTRAL_API_KEY / COHERE_API_KEY that are configured, plus OpenAI last
-    if its key is set too — so a Gemini rate limit mid-pipeline no longer
-    stalls resume generation for everyone behind it in the queue.
-    AI_PROVIDER=openai opts fully out of Gemini and the waterfall
-    (unchanged behavior).
+    When AI_PROVIDER=gemini (the default), text generation runs through a
+    waterfall in this order: Groq FIRST (its free tier is ~50x larger than
+    Gemini's real 20-requests/day generation quota, measured in production),
+    then Gemini, then OpenRouter / GitHub Models / Mistral / Cohere, with
+    OpenAI last if its key is set. Providers without a configured key are
+    skipped. Embeddings always go to Gemini regardless (separate quota, and
+    pgvector vectors must stay in one embedding space).
+    AI_PROVIDER=openai opts fully out of the waterfall (unchanged behavior).
     """
     global _provider_instance
     if _provider_instance is None:
         provider = settings.ai_provider.lower()
         if provider == "gemini":
             gemini = GeminiProvider()
-            fallbacks = _build_fallback_providers()
+            others = _build_fallback_providers()
+            groq = [p for p in others if getattr(p, "name", "") == "groq"]
+            rest = [p for p in others if getattr(p, "name", "") != "groq"]
+            chain: list[AIProvider] = [*groq, gemini, *rest]
             if settings.openai_api_key:
-                fallbacks.append(OpenAIProvider())
-            _provider_instance = WaterfallAIProvider(gemini, fallbacks) if fallbacks else gemini
+                chain.append(OpenAIProvider())
+            _provider_instance = WaterfallAIProvider(gemini, chain) if len(chain) > 1 else gemini
         elif provider == "openai":
             _provider_instance = OpenAIProvider()
         else:

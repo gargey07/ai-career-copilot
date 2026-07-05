@@ -10,7 +10,7 @@ Run standalone:
     python core/optimizer.py
 """
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 from core.ai import get_ai_provider
 from core.config import get_settings
@@ -171,6 +171,55 @@ async def generate_cover_letter(
     return await ai.generate_text(prompt, temperature=0.5)
 
 
+# How far back to reuse an already-generated resume for the same user+job.
+# The freshness logic re-surfaces a job at most every few days on a small
+# job pool — regenerating an identical resume for it costs a full AI call
+# for byte-identical output.
+RESUME_CACHE_DAYS = 7
+
+
+def _find_recent_resume(supabase, user_id: str, job_id: str, today: str) -> dict | None:
+    """Most recent prior match of the same user+job (within RESUME_CACHE_DAYS)
+    that already has generated resume text. Best-effort — any failure just
+    means a fresh AI call, never an error."""
+    cutoff = (date.today() - timedelta(days=RESUME_CACHE_DAYS)).isoformat()
+    try:
+        resp = (
+            supabase.table("user_jobs")
+            .select("optimized_resume_text, cover_letter_text, pdf_url")
+            .eq("user_id", user_id)
+            .eq("job_id", job_id)
+            .neq("digest_date", today)
+            .gte("digest_date", cutoff)
+            .not_.is_("optimized_resume_text", "null")
+            .order("digest_date", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return (resp.data or [None])[0]
+    except Exception as e:
+        logger.warning(f"   Resume-cache lookup failed ({e}) — generating fresh.")
+        return None
+
+
+def _apply_cached_resume(supabase, match_id: str, cached: dict) -> None:
+    """Copy a prior generation onto today's row. The PDF is byte-identical
+    for the same user+job, so a cached pdf_url skips the Chromium render
+    too (the PDF generator selects on pdf_url IS NULL)."""
+    payload = {
+        "optimized_resume_text": cached["optimized_resume_text"],
+        "cover_letter_text": cached.get("cover_letter_text"),
+        "status": "pdf_ready" if cached.get("pdf_url") else "resume_ready",
+    }
+    if cached.get("pdf_url"):
+        payload["pdf_url"] = cached["pdf_url"]
+    try:
+        supabase.table("user_jobs").update({**payload, "cache_hit": True}).eq("id", match_id).execute()
+    except Exception:
+        # cache_hit is a newer column — reuse must work without the migration.
+        supabase.table("user_jobs").update(payload).eq("id", match_id).execute()
+
+
 # ── Pipeline Function ─────────────────────────────────────────────────────────
 async def run_optimizer_for_user(user_id: str) -> int:
     """
@@ -218,6 +267,18 @@ async def run_optimizer_for_user(user_id: str) -> int:
     # 3. For each top match, generate resume (+ cover letter when enabled)
     generated = 0
     for match in matches:
+        # Reuse a recent generation for the same user+job before spending
+        # an AI call (and possibly a Chromium render) on identical output.
+        cached = _find_recent_resume(supabase, user_id, match["job_id"], today)
+        if cached:
+            try:
+                _apply_cached_resume(supabase, match["id"], cached)
+                generated += 1
+                logger.info(f"   ♻️  Reused cached resume for job {match['job_id']} (no AI call)")
+                continue
+            except Exception as e:
+                logger.warning(f"   Cache apply failed ({e}) — generating fresh.")
+
         job_resp = (
             supabase.table("jobs")
             .select("title, company, description")

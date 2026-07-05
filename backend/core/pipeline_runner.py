@@ -19,10 +19,12 @@ import logging
 
 from database.supabase_client import get_supabase
 from jobs.fetchers import run_all_fetchers
+from core.config import get_settings
 from core.skill_maps import get_search_queries, JOB_CATEGORIES
 from core.matcher import run_matching_for_all_users
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 async def _embed_unembedded_jobs(batch_size: int = 50) -> int:
@@ -110,8 +112,31 @@ async def _run_delivery_for_user(user_id: str) -> dict:
     return stats
 
 
-async def run_fetch_and_match() -> dict:
-    """The full daily pipeline: fetch → embed → match → optimize → PDF → email."""
+async def send_admin_alert(subject: str, body: str) -> None:
+    """
+    Email the founder when a pipeline run fails outright (not per-user
+    degradations — those are logged and degrade gracefully by design).
+    Capped at a few per day via the usage-guard table so a failure that
+    recurs every scheduler tick can't flood the inbox.
+    """
+    try:
+        from core.email_sender import _send_email
+        from core.usage_guard import check_budget
+
+        if not check_budget("admin_alerts", 5):
+            logger.warning("   Admin-alert daily cap reached — suppressing further alerts today.")
+            return
+        html = f"<pre style='font-family:monospace;white-space:pre-wrap'>{body}</pre>"
+        await _send_email(settings.founder_email, f"[AI Career Copilot] {subject}", html, unsubscribe_url="")
+        logger.info(f"   🚨 Admin alert sent: {subject}")
+    except Exception as e:
+        # Alerting must never take the pipeline down with it.
+        logger.error(f"   Couldn't send admin alert ({subject}): {e}")
+
+
+async def run_fetch_and_match_jobs_only() -> dict:
+    """Fetch → embed → match for all active users. No resumes/PDFs/email —
+    the delivery half runs separately, per user, at their chosen digest slot."""
     supabase = get_supabase()
     users = supabase.table("users").select("id, job_category").eq("is_active", True).execute().data or []
     categories = sorted({(u.get("job_category") or "").strip() or "ui_ux_designer" for u in users})
@@ -126,6 +151,21 @@ async def run_fetch_and_match() -> dict:
 
     embedded = await _embed_unembedded_jobs()
     match_result = await run_matching_for_all_users()
+    return {
+        "categories": categories,
+        "jobs_fetched": total_fetched,
+        "jobs_embedded": embedded,
+        **match_result,
+    }
+
+
+async def run_fetch_and_match() -> dict:
+    """The full pipeline in one shot: fetch → embed → match → optimize →
+    PDF → email for every active user. Used by the manual admin trigger;
+    the scheduler uses the split halves to honor per-user digest slots."""
+    supabase = get_supabase()
+    fetch_stats = await run_fetch_and_match_jobs_only()
+    users = supabase.table("users").select("id").eq("is_active", True).execute().data or []
 
     resumes = pdfs = emails = 0
     for user in users:
@@ -135,10 +175,7 @@ async def run_fetch_and_match() -> dict:
         emails += 1 if delivery["emailed"] else 0
 
     stats = {
-        "categories": categories,
-        "jobs_fetched": total_fetched,
-        "jobs_embedded": embedded,
-        **match_result,
+        **fetch_stats,
         "resumes_optimized": resumes,
         "pdfs_generated": pdfs,
         "digests_emailed": emails,

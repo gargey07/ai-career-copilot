@@ -65,32 +65,97 @@ IST = timezone(timedelta(hours=5, minutes=30))
 _SCHEDULER_POLL_SECONDS = 300
 
 
-async def _daily_pipeline_scheduler() -> None:
-    """
-    Runs the full pipeline (fetch → match → resumes → PDFs → digest emails)
-    once per day at/after DIGEST_TIME IST, with no external cron needed —
-    GitHub's scheduled workflows proved unreliable (measured firing every
-    1-3 hours on a */10 schedule) and asking the founder to click "Run
-    pipeline now" every morning doesn't scale past day one.
+def _user_slot(user: dict) -> str:
+    """preferred_digest_time ('07:00:00' TIME, may be null/missing) -> 'HH:MM'."""
+    raw = str(user.get("preferred_digest_time") or settings.digest_time)
+    return raw[:5]
 
-    Once-per-day enforcement rides on the existing usage-guard table:
-    check_budget("daily_pipeline", 1) consumes the single daily slot in the
-    DB, so restarts/redeploys can't double-run it. If the instance is
-    asleep at DIGEST_TIME (keep-warm gap), the run simply fires on the next
-    wake-up — the condition is "past digest time and not yet run today",
-    not an exact-minute match. Manual admin "Run pipeline now" stays
-    independent of this slot (idempotent stages make an extra run safe).
+
+async def _scheduler_tick() -> None:
+    """
+    One pass of the daily scheduler. Users pick their own digest slot
+    (preferred_digest_time, default 07:00 IST), so delivery is per-user:
+
+    1. When the first due user of the day appears, run the fetch/embed/match
+       half once (day-locked via check_budget("daily_pipeline", 1)) — this
+       guarantees fresh matches exist before the earliest delivery.
+    2. Deliver (resumes → PDFs → digest email) to each user whose slot has
+       arrived, each behind their own once-per-day usage-guard lock, so
+       restarts can't double-deliver and later ticks skip already-served
+       users without touching the optimizer at all. A user whose slot was
+       missed while the instance slept gets caught up on the next tick —
+       the condition is "slot <= now", not an exact-minute match.
+
+    Manual admin "Run pipeline now" stays independent and immediate
+    (idempotent stages + email_logs make overlap safe).
     """
     from core.usage_guard import check_budget
-    from core.pipeline_runner import run_fetch_and_match
+    from core.pipeline_runner import (
+        run_fetch_and_match_jobs_only,
+        _run_delivery_for_user,
+        send_admin_alert,
+    )
+    from database.supabase_client import get_supabase
 
+    supabase = get_supabase()
+    now_hhmm = datetime.now(IST).strftime("%H:%M")
+
+    # preferred_digest_time is a newer column — fall back to the global
+    # default for everyone if the migration hasn't run.
+    try:
+        users = (
+            supabase.table("users")
+            .select("id, preferred_digest_time")
+            .eq("is_active", True)
+            .execute()
+        ).data or []
+    except Exception:
+        users = (
+            supabase.table("users").select("id").eq("is_active", True).execute()
+        ).data or []
+
+    due = [u for u in users if _user_slot(u) <= now_hhmm]
+    if not due:
+        return
+
+    if check_budget("daily_pipeline", 1):
+        logger.info("⏰ Scheduler: first due slot reached — running fetch/match for all users")
+        try:
+            stats = await run_fetch_and_match_jobs_only()
+            logger.info(f"⏰ Scheduler: fetch/match done — {stats}")
+        except Exception as e:
+            logger.error(f"❌ Scheduler fetch/match failed: {e}", exc_info=True)
+            await send_admin_alert(
+                "Daily fetch/match failed",
+                f"The scheduled fetch/embed/match run crashed at {now_hhmm} IST:\n\n{e!r}",
+            )
+            # Deliveries still proceed — yesterday's unprocessed matches may
+            # exist, and each stage degrades gracefully on its own.
+
+    for user in due:
+        if not check_budget(f"daily_delivery_{user['id']}", 1):
+            continue  # already delivered today
+        logger.info(f"⏰ Scheduler: delivering to user {user['id']} (slot {_user_slot(user)})")
+        try:
+            await _run_delivery_for_user(user["id"])
+        except Exception as e:
+            logger.error(f"❌ Scheduled delivery failed for {user['id']}: {e}", exc_info=True)
+            await send_admin_alert(
+                "Digest delivery failed",
+                f"Delivery for user {user['id']} (slot {_user_slot(user)}) crashed:\n\n{e!r}",
+            )
+
+
+async def _daily_pipeline_scheduler() -> None:
+    """
+    In-process daily scheduler — no external cron needed. GitHub's scheduled
+    workflows proved unreliable (measured firing every 1-3 hours on a */10
+    schedule) and asking the founder to click "Run pipeline now" every
+    morning doesn't scale past day one. See _scheduler_tick for semantics.
+    """
     while True:
         try:
-            now_ist = datetime.now(IST).strftime("%H:%M")
-            if now_ist >= settings.digest_time and check_budget("daily_pipeline", 1):
-                logger.info("⏰ Daily pipeline scheduler: starting today's automatic run")
-                stats = await run_fetch_and_match()
-                logger.info(f"⏰ Daily pipeline scheduler: done — {stats}")
+            await _scheduler_tick()
         except Exception as e:
             logger.error(f"❌ Daily pipeline scheduler error: {e}", exc_info=True)
         await asyncio.sleep(_SCHEDULER_POLL_SECONDS)

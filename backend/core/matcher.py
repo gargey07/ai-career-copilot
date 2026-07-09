@@ -317,9 +317,6 @@ async def store_matches(user_id: str, matched_jobs: list[dict]) -> int:
             "status": "matched",
         })
 
-    if not rows:
-        return 0
-
     # A same-day re-run (e.g. after fixing a matching bug like the
     # cross-category one) computes a fresh ranking, but the upsert below
     # uses ignore_duplicates=True — it only ADDS rows, it never removes
@@ -330,6 +327,12 @@ async def store_matches(user_id: str, matched_jobs: list[dict]) -> int:
     # 'matched' state (no resume/PDF/feedback/email progress) are removed —
     # anything a user has already seen or the pipeline has already worked
     # on is left untouched.
+    #
+    # This deliberately runs even when the fresh ranking is EMPTY: that is
+    # exactly the case where every stored match from an earlier buggy run
+    # was wrong (nothing in the pool survives the corrected filter), so
+    # skipping cleanup here would leave the user permanently stuck with
+    # only the bad rows.
     try:
         stale_resp = (
             supabase.table("user_jobs")
@@ -345,6 +348,9 @@ async def store_matches(user_id: str, matched_jobs: list[dict]) -> int:
             logger.info(f"   Removed {len(stale_ids)} stale unprogressed match(es) for {user_id} (today, no longer in the fresh ranking)")
     except Exception as e:
         logger.warning(f"   Couldn't clean stale matches for {user_id} ({e}) — continuing anyway.")
+
+    if not rows:
+        return 0
 
     try:
         resp = (

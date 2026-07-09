@@ -304,6 +304,28 @@ async def _match_new_user(user_id: str) -> None:
     Best-effort throughout: an empty job pool or AI budget cap just means
     fewer/no matches or resumes, never a failed signup.
     """
+    # Fetch jobs for THIS user's category first. The shared pool only
+    # contains categories of existing users' past fetches, and matching now
+    # enforces category relevance instead of padding with other categories'
+    # jobs — so a signup in a never-fetched category (the first fullstack
+    # dev, the first marketer...) would otherwise land on an honest-but-
+    # empty dashboard until the next morning's pipeline. Best-effort and
+    # budget-guarded like every fetch; a failure just means matching runs
+    # against whatever pool already exists.
+    try:
+        from database.supabase_client import get_supabase
+        from jobs.fetchers import run_all_fetchers
+        from core.pipeline_runner import _queries_for_category
+
+        user_resp = get_supabase().table("users").select("job_category").eq("id", user_id).single().execute()
+        category = ((user_resp.data or {}).get("job_category") or "").strip()
+        if category:
+            for query in _queries_for_category(category)[:1]:  # one query — signup latency matters
+                fetched = await run_all_fetchers(query=query, category=category)
+                logger.info(f"⚡ Signup fetch for '{category}': {fetched} new jobs")
+    except Exception as e:
+        logger.warning(f"⚠️  Signup-time job fetch failed for {user_id}: {e}")
+
     try:
         from core.matcher import match_jobs_for_user, store_matches
 

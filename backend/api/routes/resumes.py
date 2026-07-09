@@ -399,4 +399,7 @@ async def confirm_profile(payload: ConfirmProfileRequest, background_tasks: Back
 
     user_id = resp.data[0]["id"]
     background_tasks.add_task(_match_new_user, user_id)
-    return {"id": user_id}
+    # The signed token is the user's key to their own dashboard — dashboard
+    # endpoints no longer accept a bare user_id (core/access_token.py).
+    from core.access_token import generate_dashboard_token
+    return {"id": user_id, "dashboard_token": generate_dashboard_token(user_id)}

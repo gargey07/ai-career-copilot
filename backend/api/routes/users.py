@@ -5,17 +5,25 @@ The frontend can't read users/user_jobs directly: those tables have RLS
 (auth.uid() = id) and the app has no Supabase auth session, so anon reads
 are always blocked. These reads go through the backend's service_role
 client (which bypasses RLS) instead — same pattern as /resumes/confirm.
+
+Every user-scoped endpoint here requires a signed dashboard token
+(core/access_token.py) in the `t` query param — a raw user_id in the URL
+is no longer enough to read a dashboard or write feedback/preferences.
 """
 from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from core.access_token import generate_dashboard_token, verify_dashboard_token
+from core.config import get_settings
+from core.usage_guard import check_budget
 from database.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 router = APIRouter()
 
 # TICKET-008: resume feedback. 'up' needs no reason; 'down' gets an
@@ -26,10 +34,43 @@ ALLOWED_REASONS = {
     "experience_not_prioritized", "formatting_issue", "other",
 }
 
+# Job-relevance feedback — a different signal from the resume thumbs above:
+# "this JOB isn't for me" (feeds matching penalties in core/matcher.py),
+# not "this resume needs work".
+ALLOWED_JOB_REASONS = {
+    "", "wrong_role", "too_senior", "too_junior", "wrong_location", "company",
+}
+
+
+def _require_dashboard_token(user_id: str, t: str) -> None:
+    """401 unless `t` is a valid dashboard token FOR this exact user."""
+    token_user = verify_dashboard_token(t or "")
+    if token_user is None or token_user != user_id:
+        raise HTTPException(
+            401,
+            "This link is invalid or has expired — request a fresh dashboard link below.",
+        )
+
 
 class FeedbackRequest(BaseModel):
     feedback: str
     reason: str = ""
+
+
+class JobFeedbackRequest(BaseModel):
+    reason: str = ""
+
+
+class AppliedRequest(BaseModel):
+    applied: bool = True
+
+
+class DashboardLinkRequest(BaseModel):
+    email: str
+
+
+class PreferencesUpdate(BaseModel):
+    preferred_digest_time: str
 
 
 def compute_profile_strength(user: dict) -> int:
@@ -58,8 +99,9 @@ def compute_profile_strength(user: dict) -> int:
 
 
 @router.get("/{user_id}/dashboard")
-async def get_dashboard(user_id: str):
+async def get_dashboard(user_id: str, t: str = Query("", description="Signed dashboard token")):
     """Return a user's profile summary + their matched jobs for the dashboard."""
+    _require_dashboard_token(user_id, t)
     supabase = get_supabase()
 
     base_fields = (
@@ -89,30 +131,31 @@ async def get_dashboard(user_id: str):
 
     full_user = user_resp.data[0]
 
-    # feedback/feedback_reason are newer columns — same missing-migration
+    # feedback/job_feedback are newer columns — same missing-migration
     # fallback pattern as the `projects` select above. optimized_resume_text
     # is fetched only to derive has_optimized_resume below — the raw text
     # itself is never shipped to the dashboard (see the transform below).
     jobs_fields = (
-        "id, match_score, pdf_url, digest_date, status, optimized_resume_text, "
+        "id, match_score, pdf_url, digest_date, status, applied_at, optimized_resume_text, "
         "jobs(id, title, company, location, is_remote, source_url)"
     )
-    try:
-        jobs_resp = (
-            supabase.table("user_jobs")
-            .select(f"{jobs_fields}, feedback, feedback_reason")
-            .eq("user_id", user_id)
-            .order("match_score", desc=True)
-            .execute()
-        )
-    except Exception:
-        jobs_resp = (
-            supabase.table("user_jobs")
-            .select(jobs_fields)
-            .eq("user_id", user_id)
-            .order("match_score", desc=True)
-            .execute()
-        )
+    jobs_resp = None
+    for extra in (", feedback, feedback_reason, job_feedback, job_feedback_reason",
+                  ", feedback, feedback_reason",
+                  ""):
+        try:
+            jobs_resp = (
+                supabase.table("user_jobs")
+                .select(f"{jobs_fields}{extra}")
+                .eq("user_id", user_id)
+                .order("match_score", desc=True)
+                .execute()
+            )
+            break
+        except Exception:
+            continue
+    if jobs_resp is None:
+        raise HTTPException(500, "We couldn't load your matches — please try again.")
 
     # has_optimized_resume tells the dashboard whether a resume was ever
     # queued for this match at all — without it, "no pdf_url yet" is
@@ -138,14 +181,58 @@ async def get_dashboard(user_id: str):
     }
     return {"user": user, "jobs": jobs}
 
-class PreferencesUpdate(BaseModel):
-    preferred_digest_time: str
+
+@router.post("/request-dashboard-link")
+async def request_dashboard_link(payload: DashboardLinkRequest, request: Request):
+    """
+    "Get my dashboard link" — for returning users whose link was lost or
+    invalidated. Always answers with the same generic success whether or
+    not the email exists (no account enumeration); if it does exist, the
+    signed link is emailed. Rate-limited per client IP.
+    """
+    client_ip = (request.client.host if request.client else "unknown") or "unknown"
+    if not check_budget(f"dash_link_ip_{client_ip}", 5):
+        raise HTTPException(429, "Too many link requests today — please try again tomorrow.")
+
+    email = (payload.email or "").strip().lower()
+    generic = {"status": "ok", "message": "If that email has an account, your dashboard link is on its way."}
+    if not email or "@" not in email:
+        return generic
+
+    supabase = get_supabase()
+    try:
+        resp = supabase.table("users").select("id, name").eq("email", email).limit(1).execute()
+    except Exception as e:
+        logger.warning(f"   Dashboard-link lookup failed ({e})")
+        return generic
+    if not resp.data:
+        return generic
+
+    user = resp.data[0]
+    token = generate_dashboard_token(user["id"])
+    frontend = (settings.frontend_url or "https://ai-career-copilot-taupe-five.vercel.app").rstrip("/")
+    link = f"{frontend}/dashboard?t={token}"
+    first_name = (user.get("name") or "there").split()[0]
+    html = (
+        f"<p>Hi {first_name},</p>"
+        f"<p>Here's your personal dashboard link:</p>"
+        f"<p><a href=\"{link}\">Open my dashboard</a></p>"
+        f"<p style='color:#64748B;font-size:13px'>Keep this link private — anyone who has it can see your job matches.</p>"
+    )
+    try:
+        from core.email_sender import _send_email
+        await _send_email(email, "Your AI Career Copilot dashboard link", html, unsubscribe_url="")
+    except Exception as e:
+        logger.error(f"   Couldn't email dashboard link to {email}: {e}")
+    return generic
+
 
 @router.patch("/{user_id}/preferences")
-async def update_preferences(user_id: str, payload: PreferencesUpdate):
+async def update_preferences(user_id: str, payload: PreferencesUpdate, t: str = Query("")):
     """T-012: Update user's preferred digest time."""
+    _require_dashboard_token(user_id, t)
     supabase = get_supabase()
-    
+
     try:
         supabase.table("users").update({
             "preferred_digest_time": payload.preferred_digest_time
@@ -153,18 +240,19 @@ async def update_preferences(user_id: str, payload: PreferencesUpdate):
     except Exception as e:
         logger.error(f"Failed to update preferences for {user_id}: {e}")
         raise HTTPException(500, "Could not save preferences.")
-        
+
     return {"status": "ok"}
 
 
 @router.post("/{user_id}/matches/{match_id}/feedback")
-async def submit_match_feedback(user_id: str, match_id: str, payload: FeedbackRequest):
+async def submit_match_feedback(user_id: str, match_id: str, payload: FeedbackRequest, t: str = Query("")):
     """
     Thumbs up/down on a generated resume — the cheapest real learning
     signal in the beta (docs/BETA_PRODUCT_LOG.md experiment #2). Verifies
     the match actually belongs to this user before writing, so one
     dashboard link can't overwrite another user's feedback.
     """
+    _require_dashboard_token(user_id, t)
     if payload.feedback not in ALLOWED_FEEDBACK:
         raise HTTPException(400, "Feedback must be 'up' or 'down'.")
     if payload.reason not in ALLOWED_REASONS:
@@ -188,8 +276,64 @@ async def submit_match_feedback(user_id: str, match_id: str, payload: FeedbackRe
     return {"status": "ok"}
 
 
+@router.post("/{user_id}/matches/{match_id}/job-feedback")
+async def submit_job_feedback(user_id: str, match_id: str, payload: JobFeedbackRequest, t: str = Query("")):
+    """
+    "This job isn't relevant to me" — a JOB-fit signal (distinct from the
+    resume thumbs above). core/matcher.py reads these rows to exclude the
+    same company and demote similar titles in future matching.
+    """
+    _require_dashboard_token(user_id, t)
+    if payload.reason not in ALLOWED_JOB_REASONS:
+        raise HTTPException(400, "Unrecognized reason.")
+
+    supabase = get_supabase()
+    owns = supabase.table("user_jobs").select("id").eq("id", match_id).eq("user_id", user_id).execute()
+    if not owns.data:
+        raise HTTPException(404, "Match not found.")
+
+    try:
+        supabase.table("user_jobs").update({
+            "job_feedback": "not_relevant",
+            "job_feedback_reason": payload.reason or None,
+        }).eq("id", match_id).execute()
+    except Exception as e:
+        logger.warning(f"   Job-feedback write failed for match {match_id} ({e}) — job_feedback columns may be unmigrated.")
+        raise HTTPException(500, "Couldn't save that — try again in a moment.")
+
+    return {"status": "ok"}
+
+
+@router.post("/{user_id}/matches/{match_id}/applied")
+async def mark_applied(user_id: str, match_id: str, payload: AppliedRequest, t: str = Query("")):
+    """
+    User-asserted "I applied to this job" — the honest version of the
+    Applications metric (docs/PRODUCT_STRATEGY_BETA.md: never display
+    numbers we can't back). Toggling off reverts to 'emailed' (a safe,
+    already-progressed state) rather than trying to reconstruct history.
+    """
+    _require_dashboard_token(user_id, t)
+    supabase = get_supabase()
+    owns = supabase.table("user_jobs").select("id").eq("id", match_id).eq("user_id", user_id).execute()
+    if not owns.data:
+        raise HTTPException(404, "Match not found.")
+
+    update = (
+        {"status": "applied", "applied_at": datetime.now(timezone.utc).isoformat()}
+        if payload.applied
+        else {"status": "emailed", "applied_at": None}
+    )
+    try:
+        supabase.table("user_jobs").update(update).eq("id", match_id).execute()
+    except Exception as e:
+        logger.error(f"   Applied write failed for match {match_id}: {e}")
+        raise HTTPException(500, "Couldn't save that — try again in a moment.")
+
+    return {"status": "ok", "applied": payload.applied}
+
+
 @router.post("/{user_id}/matches/{match_id}/retry-pdf")
-async def retry_pdf(user_id: str, match_id: str, background_tasks: BackgroundTasks):
+async def retry_pdf(user_id: str, match_id: str, background_tasks: BackgroundTasks, t: str = Query("")):
     """
     TICKET-020: the "Retry" button shown when a resume's PDF failed to
     generate (never leave a permanent 'Resume generating…' with no way
@@ -198,6 +342,7 @@ async def retry_pdf(user_id: str, match_id: str, background_tasks: BackgroundTas
     cheap and fixes infra failures (Chromium crash/timeout/upload) without
     burning another Gemini call.
     """
+    _require_dashboard_token(user_id, t)
     supabase = get_supabase()
     owns = (
         supabase.table("user_jobs")

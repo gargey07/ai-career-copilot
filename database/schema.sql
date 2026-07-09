@@ -349,6 +349,13 @@ ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS pdf_error_message TEXT;
 -- check for those.
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS search_category TEXT;
 
+-- Job-relevance feedback ("this JOB isn't for me" — distinct from the
+-- resume-quality thumbs above). core/matcher.py turns these into matching
+-- penalties: reason='company' excludes that company for the user;
+-- reason='wrong_role' demotes similar titles.
+ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS job_feedback        TEXT;  -- 'not_relevant'
+ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS job_feedback_reason TEXT;  -- wrong_role|too_senior|too_junior|wrong_location|company
+
 CREATE TABLE IF NOT EXISTS funnel_events (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   event       TEXT NOT NULL,

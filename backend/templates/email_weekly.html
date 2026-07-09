@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your week in review</title>
+  <style>
+    /* Same design system as email_digest.html: light theme, amber primary,
+       no emojis, honest copy — real counts only. */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      background-color: #F8FAFC;
+      color: #0F2F3A;
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrapper { padding: 32px 16px; }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      background: #FFFFFF;
+      border: 1px solid #E5E7EB;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .header { padding: 28px 30px 24px; border-bottom: 1px solid #E5E7EB; }
+    .brand {
+      display: inline-block;
+      background: #FEF3C7;
+      border: 1px solid #FDE68A;
+      border-radius: 8px;
+      padding: 5px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #B45309;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+    }
+    .header h1 { font-size: 22px; font-weight: 800; color: #0F2F3A; line-height: 1.3; }
+    .header-date { font-size: 13px; color: #64748B; margin-top: 6px; }
+
+    .intro { padding: 22px 30px 6px; }
+    .intro-greeting { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+    .intro-text { font-size: 14px; line-height: 1.6; color: #64748B; }
+
+    .stats { padding: 18px 30px 8px; }
+    .stat-row {
+      display: flex; justify-content: space-between; align-items: baseline;
+      padding: 12px 0; border-bottom: 1px solid #F1F5F9;
+    }
+    .stat-label { font-size: 14px; color: #0F2F3A; }
+    .stat-value { font-size: 20px; font-weight: 800; color: #0F2F3A; }
+
+    .dashboard-cta { padding: 22px 30px 26px; text-align: center; }
+    .dashboard-cta a {
+      display: inline-block; background: #F59E0B; color: #FFFFFF !important;
+      text-decoration: none; padding: 11px 22px; border-radius: 8px;
+      font-weight: 600; font-size: 13px;
+    }
+
+    .footer { background: #F8FAFC; border-top: 1px solid #E5E7EB; padding: 22px 30px; text-align: center; }
+    .footer-logo { font-size: 13px; font-weight: 700; color: #0F2F3A; margin-bottom: 6px; }
+    .footer-text { font-size: 11px; color: #94A3B8; line-height: 1.7; }
+    .footer-text a { color: #B45309; text-decoration: none; }
+  </style>
+</head>
+<body>
+<div class="wrapper">
+  <div class="container">
+
+    <div class="header">
+      <div class="brand">AI Career Copilot</div>
+      <h1>Your week in review</h1>
+      <div class="header-date">{{ week_range }}</div>
+    </div>
+
+    <div class="intro">
+      <div class="intro-greeting">Hi {{ user_name }},</div>
+      <p class="intro-text">Here's what happened in your job search this week — real numbers, nothing padded.</p>
+    </div>
+
+    <div class="stats">
+      <div class="stat-row">
+        <span class="stat-label">New job matches delivered</span>
+        <span class="stat-value">{{ matches }}</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Tailored resumes ready</span>
+        <span class="stat-value">{{ resumes }}</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Apply links you opened</span>
+        <span class="stat-value">{{ clicks }}</span>
+      </div>
+      {% if applied %}
+      <div class="stat-row">
+        <span class="stat-label">Jobs you marked as applied</span>
+        <span class="stat-value">{{ applied }}</span>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="dashboard-cta">
+      <a href="{{ dashboard_url }}" target="_blank">Open your dashboard</a>
+    </div>
+
+    <div class="footer">
+      <div class="footer-logo">AI Career Copilot</div>
+      <p class="footer-text">
+        Built by <a href="https://gargey-patel-portfolio.vercel.app">Gargey Patel</a> &nbsp;·&nbsp;
+        gargeypatel123@gmail.com<br>
+        You're receiving this because you joined the beta.
+        {% if unsubscribe_url %}<a href="{{ unsubscribe_url }}">Unsubscribe</a>{% endif %}
+      </p>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

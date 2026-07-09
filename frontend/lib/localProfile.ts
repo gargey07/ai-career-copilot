@@ -1,12 +1,15 @@
 // Remembers who this browser belongs to after they confirm their profile,
 // so returning visitors get routed to their dashboard instead of signup.
-// This is convenience, not auth — the dashboard is still a UUID-link model.
+// The stored `token` is the signed dashboard access token (issued by the
+// backend at confirm time or carried in an email link) — the backend no
+// longer serves dashboards for a bare user_id.
 
 const STORAGE_KEY = "acc:profile";
 
 export interface StoredProfile {
   id: string;
   name: string;
+  token?: string;
 }
 
 export function saveStoredProfile(profile: StoredProfile): void {
@@ -24,7 +27,11 @@ export function getStoredProfile(): StoredProfile | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (typeof parsed?.id === "string" && parsed.id) {
-      return { id: parsed.id, name: typeof parsed.name === "string" ? parsed.name : "" };
+      return {
+        id: parsed.id,
+        name: typeof parsed.name === "string" ? parsed.name : "",
+        token: typeof parsed.token === "string" ? parsed.token : undefined,
+      };
     }
   } catch {
     // fall through

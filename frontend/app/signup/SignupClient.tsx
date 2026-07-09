@@ -41,10 +41,10 @@ export default function SignupClient() {
     trackEvent("profile_review_reached");
   };
 
-  const handleConfirmed = (id: string, name: string) => {
-    saveStoredProfile({ id, name });
+  const handleConfirmed = (id: string, name: string, dashboardToken: string) => {
+    saveStoredProfile({ id, name, token: dashboardToken });
     trackEvent("signup_completed", { userId: id });
-    router.push(`/success?name=${encodeURIComponent(name)}&id=${id}`);
+    router.push(`/success?name=${encodeURIComponent(name)}&t=${encodeURIComponent(dashboardToken)}`);
   };
 
   return (
@@ -59,7 +59,7 @@ export default function SignupClient() {
         <div className="w-full max-w-2xl">
           {returning && step === "upload" && (
             <a
-              href={`/dashboard?user_id=${returning.id}`}
+              href={returning.token ? `/dashboard?t=${encodeURIComponent(returning.token)}` : "/dashboard"}
               className="mb-6 flex items-center justify-between gap-3 rounded-lg px-5 py-4 transition hover:shadow-e2"
               style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-e1)" }}
             >

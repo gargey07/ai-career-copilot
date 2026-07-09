@@ -44,7 +44,7 @@ import SearchInput from "@/components/SearchInput";
 interface ProfileEditorProps {
   initialProfile: Profile;
   resumeFilePath: string | null;
-  onConfirmed: (id: string, name: string) => void;
+  onConfirmed: (id: string, name: string, dashboardToken: string) => void;
 }
 
 const JOB_CATEGORIES: { value: string; label: string; icon: LucideIcon }[] = [
@@ -155,7 +155,7 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
         throw new Error(body.detail || "Something went wrong saving your profile.");
       }
       const data = await res.json();
-      onConfirmed(data.id, profile.basic_info.full_name);
+      onConfirmed(data.id, profile.basic_info.full_name, data.dashboard_token || "");
     } catch (e: any) {
       setError(e.message || "Something went wrong. Please try again.");
       setLoading(false);

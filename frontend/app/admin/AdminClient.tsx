@@ -41,6 +41,7 @@ interface AdminUserRow {
   experience_level: string;
   is_active: boolean;
   has_resume: boolean;
+  dashboard_token?: string;
   matches_total: number;
   matches_today: number;
   resumes_ready: number;
@@ -424,7 +425,7 @@ export default function AdminClient() {
                           <td className="px-2 py-3">
                             <div className="flex flex-col gap-1">
                               <a
-                                href={`/dashboard?user_id=${u.id}`}
+                                href={u.dashboard_token ? `/dashboard?t=${encodeURIComponent(u.dashboard_token)}` : "/dashboard"}
                                 className="text-xs font-medium hover:underline"
                                 style={{ color: "var(--primary)" }}
                               >

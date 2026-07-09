@@ -128,6 +128,10 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
         "matches_total": 0, "matches_today": 0, "resumes_ready": 0,
         "applied": 0, "interviewing": 0, "offered": 0, "last_digest_date": None,
     }
+    # Dashboards now require a signed token (core/access_token.py) — the
+    # admin's "View dashboard" links must carry one. Safe to hand out here:
+    # this whole endpoint is already behind ADMIN_TOKEN.
+    from core.access_token import generate_dashboard_token
     user_rows = [
         {
             "id": u["id"],
@@ -138,6 +142,7 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
             "experience_level": u.get("experience_level") or "—",
             "is_active": bool(u.get("is_active")),
             "has_resume": bool(u.get("resume_file_path")),
+            "dashboard_token": generate_dashboard_token(u["id"]),
             **per_user.get(u["id"], empty_stats),
         }
         for u in users

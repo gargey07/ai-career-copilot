@@ -18,13 +18,17 @@ const OUTCOMES: { icon: LucideIcon; text: string }[] = [
 function SuccessContent() {
   const params = useSearchParams();
   const name = params.get("name") || "Friend";
-  const id = params.get("id") || "";
+  const t = params.get("t") || "";
 
-  // Remember this browser's profile so the landing page, signup page, and
-  // logo all route back to the dashboard on the next visit.
+  // Remember this browser's profile (including the signed dashboard token)
+  // so the landing page, signup page, and logo all route back to the
+  // dashboard on the next visit. Token format: "{user_id}.{sig}".
   useEffect(() => {
-    if (id) saveStoredProfile({ id, name });
-  }, [id, name]);
+    if (!t) return;
+    const dot = t.lastIndexOf(".");
+    const id = dot > 0 ? t.slice(0, dot) : "";
+    if (id) saveStoredProfile({ id, name, token: t });
+  }, [t, name]);
 
   return (
     <main className="min-h-screen flex flex-col items-center justify-center px-6 py-12" style={{ background: "var(--bg)", color: "var(--text)" }}>
@@ -62,13 +66,13 @@ function SuccessContent() {
           </div>
         </div>
 
-        {id && (
+        {t && (
           <div className="rounded-lg p-6 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-e1)" }}>
             <p className="text-sm mb-4" style={{ color: "var(--text-muted)" }}>
               Your first matches are being prepared right now — they usually appear within a few minutes.
             </p>
             <a
-              href={`/dashboard?user_id=${id}`}
+              href={`/dashboard?t=${encodeURIComponent(t)}`}
               className="inline-flex items-center gap-2 px-6 py-3 rounded-md font-semibold text-white transition hover:opacity-90 text-sm"
               style={{ background: "var(--primary)", boxShadow: "var(--shadow-e1)" }}
             >

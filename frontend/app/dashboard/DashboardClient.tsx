@@ -18,7 +18,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
-import { getStoredProfile } from "@/lib/localProfile";
+import { getStoredProfile, saveStoredProfile } from "@/lib/localProfile";
 import { BrandMark } from "@/components/BrandMark";
 import { AiDisclosure } from "@/components/AiDisclosure";
 import { Card } from "@/components/ui/Card";
@@ -40,14 +40,33 @@ interface UserJob {
   pdf_url: string | null;
   digest_date: string;
   status: string;
+  applied_at?: string | null;
   jobs: Job;
   feedback?: string | null;
   feedback_reason?: string | null;
+  job_feedback?: string | null;
   // Whether a resume was ever queued for this match at all — distinguishes
   // "not selected for AI tailoring" (normal — only top matches get one)
   // from "generation failed" (TICKET-020). See backend/api/routes/users.py.
   has_optimized_resume?: boolean;
 }
+
+// The signed dashboard token IS the user's key — backend endpoints reject
+// bare user_ids (backend/core/access_token.py). Format: "{user_id}.{sig}".
+function userIdFromToken(token: string): string | null {
+  const i = token.lastIndexOf(".");
+  return i > 0 ? token.slice(0, i) : null;
+}
+
+// Job-relevance reasons — "this JOB isn't for me" (feeds matching
+// penalties), distinct from the resume-quality chips below.
+const JOB_FEEDBACK_REASONS: { value: string; label: string }[] = [
+  { value: "wrong_role", label: "Wrong kind of role" },
+  { value: "too_senior", label: "Too senior" },
+  { value: "too_junior", label: "Too junior" },
+  { value: "wrong_location", label: "Wrong location" },
+  { value: "company", label: "Not this company" },
+];
 interface User {
   id: string;
   name: string;
@@ -133,7 +152,7 @@ function StatCard({
 }
 
 // ── Resume feedback widget (thumbs up/down + reason chips) ─────────────────────
-function ResumeFeedback({ userId, match }: { userId: string; match: UserJob }) {
+function ResumeFeedback({ userId, token, match }: { userId: string; token: string; match: UserJob }) {
   const [feedback, setFeedback] = useState<string | null>(match.feedback || null);
   const [pickingReason, setPickingReason] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -141,7 +160,7 @@ function ResumeFeedback({ userId, match }: { userId: string; match: UserJob }) {
   const submit = async (value: "up" | "down", reason = "") => {
     setSubmitting(true);
     try {
-      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${match.id}/feedback`, {
+      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${match.id}/feedback?t=${encodeURIComponent(token)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ feedback: value, reason }),
@@ -223,13 +242,13 @@ function ResumeFeedback({ userId, match }: { userId: string; match: UserJob }) {
 
 // ── Retry button for a failed/stuck PDF (TICKET-020) ────────────────────────────
 // Never leave a permanent "Resume generating…" with no way out.
-function RetryPdfButton({ userId, matchId }: { userId: string; matchId: string }) {
+function RetryPdfButton({ userId, token, matchId }: { userId: string; token: string; matchId: string }) {
   const [state, setState] = useState<"idle" | "retrying" | "started">("idle");
 
   const retry = async () => {
     setState("retrying");
     try {
-      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${matchId}/retry-pdf`, { method: "POST" });
+      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${matchId}/retry-pdf?t=${encodeURIComponent(token)}`, { method: "POST" });
       setState(res.ok ? "started" : "idle");
     } catch {
       setState("idle");
@@ -259,8 +278,122 @@ function RetryPdfButton({ userId, matchId }: { userId: string; matchId: string }
   );
 }
 
+// ── "I applied" toggle — user-asserted, the honest Applications metric ─────────
+function AppliedButton({ userId, token, match }: { userId: string; token: string; match: UserJob }) {
+  const [applied, setApplied] = useState(match.status === "applied");
+  const [saving, setSaving] = useState(false);
+
+  const toggle = async () => {
+    const next = !applied;
+    setSaving(true);
+    setApplied(next); // optimistic
+    try {
+      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${match.id}/applied?t=${encodeURIComponent(token)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ applied: next }),
+      });
+      if (!res.ok) setApplied(!next); // roll back
+    } catch {
+      setApplied(!next);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      disabled={saving}
+      aria-pressed={applied}
+      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-semibold transition disabled:opacity-60"
+      style={
+        applied
+          ? { background: "#ECFDF5", border: "1px solid #A7F3D0", color: "#0F9D8C" }
+          : { border: "1px solid var(--border)", color: "var(--text-muted)" }
+      }
+      title={applied ? "Tap to undo" : "Mark that you applied to this job"}
+    >
+      {applied ? "Applied ✓" : "I applied"}
+    </button>
+  );
+}
+
+// ── "Not relevant" — job-fit feedback that feeds matching penalties ────────────
+function NotRelevant({ userId, token, match }: { userId: string; token: string; match: UserJob }) {
+  const [state, setState] = useState<"idle" | "picking" | "done">(
+    match.job_feedback === "not_relevant" ? "done" : "idle"
+  );
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async (reason: string) => {
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${match.id}/job-feedback?t=${encodeURIComponent(token)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      });
+      if (res.ok) setState("done");
+    } catch {
+      // stay in picking state so they can retry
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (state === "done") {
+    return (
+      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+        Noted — we&apos;ll avoid jobs like this for you.
+      </p>
+    );
+  }
+
+  if (state === "picking") {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Why not?</span>
+        {JOB_FEEDBACK_REASONS.map((r) => (
+          <button
+            key={r.value}
+            type="button"
+            disabled={submitting}
+            onClick={() => submit(r.value)}
+            className="px-2.5 py-1 rounded-full text-xs border transition hover:border-[var(--primary)] hover:text-[var(--text)]"
+            style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}
+          >
+            {r.label}
+          </button>
+        ))}
+        <button
+          type="button"
+          disabled={submitting}
+          onClick={() => submit("")}
+          className="px-2.5 py-1 text-xs hover:underline"
+          style={{ color: "var(--text-muted)" }}
+        >
+          Skip
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setState("picking")}
+      className="text-xs hover:underline"
+      style={{ color: "var(--text-muted)" }}
+    >
+      Not relevant?
+    </button>
+  );
+}
+
 // ── Job card ─────────────────────────────────────────────────────────────────────
-function JobCard({ match, index, userId }: { match: UserJob; index: number; userId: string }) {
+function JobCard({ match, index, userId, token }: { match: UserJob; index: number; userId: string; token: string }) {
   const job = match.jobs;
   const hasApply = job.source_url && !job.source_url.includes("example.com");
 
@@ -305,7 +438,7 @@ function JobCard({ match, index, userId }: { match: UserJob; index: number; user
             View Tailored Resume
           </a>
         ) : pdfStuckOrFailed ? (
-          <RetryPdfButton userId={userId} matchId={match.id} />
+          <RetryPdfButton userId={userId} token={token} matchId={match.id} />
         ) : pdfInProgress ? (
           <span className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm" style={{ background: "var(--surface-muted)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
             <Clock size={16} strokeWidth={1.75} />
@@ -329,13 +462,16 @@ function JobCard({ match, index, userId }: { match: UserJob; index: number; user
             Apply link coming soon
           </span>
         )}
+
+        <AppliedButton userId={userId} token={token} match={match} />
       </div>
 
-      {match.pdf_url && (
-        <div className="pt-3" style={{ borderTop: "1px solid var(--border)" }}>
-          <ResumeFeedback userId={userId} match={match} />
-        </div>
-      )}
+      <div className="pt-3 flex flex-wrap items-center justify-between gap-3" style={{ borderTop: "1px solid var(--border)" }}>
+        {match.pdf_url ? (
+          <ResumeFeedback userId={userId} token={token} match={match} />
+        ) : <span />}
+        <NotRelevant userId={userId} token={token} match={match} />
+      </div>
     </Card>
   );
 }
@@ -350,9 +486,11 @@ const TIME_SLOTS = [
 
 function DigestTimePicker({
   userId,
+  token,
   currentTime,
 }: {
   userId: string;
+  token: string;
   currentTime?: string | null;
 }) {
   const [selected, setSelected] = useState(currentTime || "07:00:00");
@@ -362,7 +500,7 @@ function DigestTimePicker({
   async function save(time: string) {
     setSaving(true);
     try {
-      const res = await fetch(`${API_URL}/api/users/${userId}/preferences`, {
+      const res = await fetch(`${API_URL}/api/users/${userId}/preferences?t=${encodeURIComponent(token)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ preferred_digest_time: time }),
@@ -434,8 +572,11 @@ function DashboardSkeleton({ hint }: { hint?: string }) {
 // found" is a real error and fails immediately.
 const DASHBOARD_RETRY_DELAYS_MS = [0, 5000, 15000, 30000];
 
+class TokenRejectedError extends Error {}
+
 async function fetchDashboardWithRetry(
   userId: string,
+  token: string,
   onAttempt?: (attempt: number, total: number) => void
 ): Promise<{ user: User; jobs: UserJob[] }> {
   let lastError: Error = new Error("Failed to load dashboard.");
@@ -446,15 +587,17 @@ async function fetchDashboardWithRetry(
       await new Promise((resolve) => setTimeout(resolve, DASHBOARD_RETRY_DELAYS_MS[attempt]));
     }
     try {
-      const res = await fetch(`${API_URL}/api/users/${userId}/dashboard`);
+      const res = await fetch(`${API_URL}/api/users/${userId}/dashboard?t=${encodeURIComponent(token)}`);
       if (res.ok) {
         const data = await res.json();
         return { user: data.user, jobs: (data.jobs as any) || [] };
       }
       const body = await res.json().catch(() => ({}));
+      if (res.status === 401) throw new TokenRejectedError(body.detail || "This link is invalid or has expired.");
       lastError = new Error(body.detail || "Failed to load dashboard.");
       if (res.status < 500) break; // real error (e.g. 404) — retrying won't help
     } catch (e: any) {
+      if (e instanceof TokenRejectedError) throw e;
       // fetch() threw — network-level failure (server unreachable/restarting)
       lastError = new Error(e.message || "Failed to load dashboard.");
     }
@@ -462,16 +605,69 @@ async function fetchDashboardWithRetry(
   throw lastError;
 }
 
+// ── "Email me my dashboard link" — recovery for lost/legacy links ──────────────
+function RequestLinkForm() {
+  const [email, setEmail] = useState("");
+  const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
+
+  const submit = async () => {
+    if (!email.trim()) return;
+    setState("sending");
+    try {
+      await fetch(`${API_URL}/api/users/request-dashboard-link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+    } catch {
+      // same outcome either way — the message below is deliberately generic
+    }
+    setState("sent");
+  };
+
+  if (state === "sent") {
+    return (
+      <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+        If that email has an account, your dashboard link is on its way — check your inbox.
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col sm:flex-row gap-2">
+      <input
+        type="email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && submit()}
+        placeholder="you@email.com"
+        className="flex-1 px-3 py-2.5 rounded-md text-sm outline-none focus:border-[var(--primary)]"
+        style={{ border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)" }}
+      />
+      <button
+        type="button"
+        onClick={submit}
+        disabled={state === "sending" || !email.trim()}
+        className="px-4 py-2.5 rounded-md text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-60"
+        style={{ background: "var(--primary)" }}
+      >
+        {state === "sending" ? "Sending…" : "Email me my link"}
+      </button>
+    </div>
+  );
+}
+
 // ── Dashboard Content ──────────────────────────────────────────────────────────
 function DashboardContent() {
   const params = useSearchParams();
-  const paramUserId = params.get("user_id");
+  const paramToken = params.get("t");
 
   const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState("");
   const [allJobs, setAllJobs] = useState<UserJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [errorKind, setErrorKind] = useState<"no-profile" | "load-failed">("load-failed");
+  const [errorKind, setErrorKind] = useState<"no-profile" | "load-failed" | "bad-token">("load-failed");
   const [retryHint, setRetryHint] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
   // Clicking the "Resumes Ready" stat card filters the whole page down to
@@ -484,12 +680,20 @@ function DashboardContent() {
   const today = new Date().toISOString().split("T")[0];
 
   useEffect(() => {
-    // No id in the URL? Fall back to the profile this browser confirmed
-    // earlier — lets returning users just visit /dashboard directly.
-    const userId = paramUserId || getStoredProfile()?.id;
-    if (!userId) {
-      setError("We don't know who you are yet — set up your profile first, or open the dashboard link from your email.");
-      setErrorKind("no-profile");
+    // The signed token comes from the URL (email links) or from what this
+    // browser stored at signup/last visit — a bare user_id is no longer
+    // enough to load anything (backend/core/access_token.py). Old
+    // ?user_id= links land in the "request a fresh link" flow below.
+    const activeToken = paramToken || getStoredProfile()?.token || "";
+    const userId = activeToken ? userIdFromToken(activeToken) : null;
+    if (!activeToken || !userId) {
+      const hadLegacyLink = !!params.get("user_id");
+      setError(
+        hadLegacyLink
+          ? "Dashboard links have been upgraded for security — request a fresh one below."
+          : "We don't know who you are yet — set up your profile first, or open the dashboard link from your email."
+      );
+      setErrorKind(hadLegacyLink ? "bad-token" : "no-profile");
       setLoading(false);
       return;
     }
@@ -498,13 +702,16 @@ function DashboardContent() {
     setLoading(true);
     setError("");
     setRetryHint("");
-    fetchDashboardWithRetry(userId, () => {
+    fetchDashboardWithRetry(userId, activeToken, () => {
       if (!cancelled) setRetryHint("Waking up the server — this can take up to a minute on our free tier.");
     })
       .then(({ user, jobs }) => {
         if (cancelled) return;
         setUser(user);
+        setToken(activeToken);
         setAllJobs(jobs);
+        // Remember the working token so /dashboard works without the URL param next time.
+        saveStoredProfile({ id: user.id, name: user.name || "", token: activeToken });
       })
       .catch((e: any) => {
         if (cancelled) return;
@@ -512,7 +719,11 @@ function DashboardContent() {
         // unreachable get different recovery actions below — Render's free
         // tier restarting mid-request is common enough that "set up your
         // profile again" would be actively wrong advice here.
-        setErrorKind(/couldn.t find a profile/i.test(e.message) ? "no-profile" : "load-failed");
+        if (e instanceof TokenRejectedError) {
+          setErrorKind("bad-token");
+        } else {
+          setErrorKind(/couldn.t find a profile/i.test(e.message) ? "no-profile" : "load-failed");
+        }
         setError(e.message || "Failed to load dashboard.");
       })
       .finally(() => {
@@ -520,7 +731,7 @@ function DashboardContent() {
       });
 
     return () => { cancelled = true; };
-  }, [paramUserId, today, reloadKey]);
+  }, [paramToken, today, reloadKey]);
 
   if (loading) {
     return (
@@ -541,6 +752,8 @@ function DashboardContent() {
           <p className="text-sm mb-5" style={{ color: "var(--text-muted)" }}>
             {errorKind === "no-profile"
               ? error || "Invalid user ID. Check your link."
+              : errorKind === "bad-token"
+              ? error || "This link is invalid or has expired."
               : "We couldn't reach the server after a few tries. It may still be waking up — this happens sometimes on our free hosting tier."}
           </p>
           {errorKind === "no-profile" ? (
@@ -551,6 +764,8 @@ function DashboardContent() {
             >
               Set up my profile
             </a>
+          ) : errorKind === "bad-token" ? (
+            <RequestLinkForm />
           ) : (
             <button
               type="button"
@@ -687,7 +902,7 @@ function DashboardContent() {
               </div>
             </div>
           </Card>
-          <DigestTimePicker userId={user.id} currentTime={user.preferred_digest_time} />
+          <DigestTimePicker userId={user.id} token={token} currentTime={user.preferred_digest_time} />
         </div>
 
         {showOnlyReady ? (
@@ -707,7 +922,7 @@ function DashboardContent() {
               </button>
             </div>
             <div className="space-y-4">
-              {readyMatches.map((m, i) => <JobCard key={m.id} match={m} index={i} userId={user.id} />)}
+              {readyMatches.map((m, i) => <JobCard key={m.id} match={m} index={i} userId={user.id} token={token} />)}
             </div>
           </>
         ) : (
@@ -716,7 +931,7 @@ function DashboardContent() {
             <h2 className="text-lg font-semibold mb-4" style={{ color: "var(--text)" }}>Today&apos;s matches</h2>
             {todayMatches.length > 0 ? (
               <div className="space-y-4">
-                {todayDisplayed.map((m, i) => <JobCard key={m.id} match={m} index={i} userId={user.id} />)}
+                {todayDisplayed.map((m, i) => <JobCard key={m.id} match={m} index={i} userId={user.id} token={token} />)}
                 {todayMatches.length > TODAY_DISPLAY_CAP && (
                   <button
                     type="button"
@@ -752,7 +967,7 @@ function DashboardContent() {
                 <h2 className="text-lg font-semibold mb-4" style={{ color: "var(--text)" }}>{historyLabel(d)}</h2>
                 <div className="space-y-4">
                   {(historyByDate.get(d) || []).map((m, i) => (
-                    <JobCard key={m.id} match={m} index={i} userId={user.id} />
+                    <JobCard key={m.id} match={m} index={i} userId={user.id} token={token} />
                   ))}
                 </div>
               </div>

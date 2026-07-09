@@ -183,6 +183,21 @@ async def _scheduler_tick() -> None:
             except Exception as e:
                 logger.error(f"❌ Digest retry crashed for {uid}: {e}", exc_info=True)
 
+    # Weekly summary: Sunday evenings IST. send_weekly_summary is itself
+    # idempotent per rolling week (email_logs) and skips zero-activity
+    # users, so the extra per-user budget lock here just avoids repeating
+    # the DB work on every later Sunday tick.
+    now_ist = datetime.now(IST)
+    if now_ist.strftime("%a") == "Sun" and now_ist.strftime("%H:%M") >= "18:00":
+        from core.email_sender import send_weekly_summary
+        for user in users:
+            if not check_budget(f"weekly_summary_{user['id']}", 1):
+                continue
+            try:
+                await send_weekly_summary(user["id"])
+            except Exception as e:
+                logger.error(f"❌ Weekly summary crashed for {user['id']}: {e}", exc_info=True)
+
 
 async def _daily_pipeline_scheduler() -> None:
     """

@@ -385,7 +385,8 @@ async def send_morning_digest(user_id: str) -> bool:
     attachments = await _download_resume_attachments(jobs_data)
 
     frontend = (settings.frontend_url or "https://ai-career-copilot-taupe-five.vercel.app").rstrip("/")
-    dashboard_url = f"{frontend}/dashboard?user_id={user_id}"
+    from core.access_token import generate_dashboard_token
+    dashboard_url = f"{frontend}/dashboard?t={generate_dashboard_token(user_id)}"
     unsubscribe_url = f"{backend}/unsubscribe?token={generate_unsubscribe_token(user_id)}"
     subject = f"Your top {len(jobs_data)} job match{'es' if len(jobs_data) != 1 else ''} — {date.today().strftime('%b %d')}"
     html = _render_email_html(
@@ -424,6 +425,100 @@ async def send_morning_digest(user_id: str) -> bool:
             )
         except Exception:
             pass  # alerting must never take the pipeline down with it
+        return False
+
+
+async def send_weekly_summary(user_id: str) -> bool:
+    """
+    Sunday recap: real activity counts from the user's last 7 days. Skips
+    entirely when there was zero activity (a hollow "0, 0, 0" email erodes
+    trust) or the user is unsubscribed. Idempotent per week via email_logs
+    (type='weekly_summary' within the last 6 days). Returns True if sent.
+    """
+    from datetime import timedelta
+
+    supabase = get_supabase()
+
+    try:
+        user_resp = supabase.table("users").select("name, email, is_subscribed").eq("id", user_id).single().execute()
+    except Exception:
+        user_resp = supabase.table("users").select("name, email").eq("id", user_id).single().execute()
+    if not user_resp.data or not user_resp.data.get("email"):
+        return False
+    user = user_resp.data
+    if user.get("is_subscribed") is False:
+        return False
+
+    week_ago = (date.today() - timedelta(days=6)).isoformat()
+
+    # Idempotency: one weekly summary per rolling week.
+    try:
+        sent_resp = (
+            supabase.table("email_logs")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("type", "weekly_summary")
+            .eq("status", "sent")
+            .gte("sent_at", week_ago)
+            .limit(1)
+            .execute()
+        )
+        if sent_resp.data:
+            return False
+    except Exception:
+        logger.warning("   Couldn't check email_logs for weekly summary — skipping to avoid duplicates.")
+        return False
+
+    # Real counts only, from this week's matches.
+    rows_resp = (
+        supabase.table("user_jobs")
+        .select("pdf_url, click_count, status, digest_date")
+        .eq("user_id", user_id)
+        .gte("digest_date", week_ago)
+        .execute()
+    )
+    rows = rows_resp.data or []
+    matches = len(rows)
+    resumes = sum(1 for r in rows if r.get("pdf_url"))
+    clicks = sum(r.get("click_count") or 0 for r in rows)
+    applied = sum(1 for r in rows if r.get("status") == "applied")
+
+    if matches == 0 and clicks == 0:
+        logger.info(f"   No activity this week for {user['email']} — skipping weekly summary.")
+        return False
+
+    from core.access_token import generate_dashboard_token
+    frontend = (settings.frontend_url or "https://ai-career-copilot-taupe-five.vercel.app").rstrip("/")
+    backend = settings.backend_url.rstrip("/")
+    dashboard_url = f"{frontend}/dashboard?t={generate_dashboard_token(user_id)}"
+    unsubscribe_url = f"{backend}/unsubscribe?token={generate_unsubscribe_token(user_id)}"
+
+    env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
+    template = env.get_template("email_weekly.html")
+    week_range = f"{date.fromisoformat(week_ago).strftime('%b %d')} – {date.today().strftime('%b %d, %Y')}"
+    html = template.render(
+        user_name=(user.get("name") or "there").split()[0],
+        week_range=week_range,
+        matches=matches, resumes=resumes, clicks=clicks, applied=applied,
+        dashboard_url=dashboard_url,
+        unsubscribe_url=unsubscribe_url,
+    )
+    subject = f"Your week: {matches} match{'es' if matches != 1 else ''}, {resumes} tailored resume{'s' if resumes != 1 else ''}"
+
+    log_row = {"user_id": user_id, "email_address": user["email"], "type": "weekly_summary", "subject": subject}
+    try:
+        provider = await _send_email(user["email"], subject, html, unsubscribe_url)
+        if provider is None:
+            return False
+        supabase.table("email_logs").insert({**log_row, "status": "sent"}).execute()
+        logger.info(f"   ✅ Weekly summary sent to {user['email']} via {provider}")
+        return True
+    except Exception as e:
+        logger.error(f"   ❌ Weekly summary failed for {user['email']}: {e}")
+        try:
+            supabase.table("email_logs").insert({**log_row, "status": "failed", "error_message": str(e)}).execute()
+        except Exception:
+            pass
         return False
 
 

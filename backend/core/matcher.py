@@ -91,6 +91,67 @@ def _category_relevant(job: dict, user_category: str, category_terms: set[str]) 
 # with them.
 MIN_KEYWORD_SCORE = 0.55
 
+# Score multiplier for jobs whose title overlaps a job the user marked
+# "not relevant (wrong role)" — deliberately harsh enough to push most
+# such candidates under MIN_KEYWORD_SCORE rather than merely reordering.
+_WRONG_ROLE_DEMOTION = 0.5
+
+
+async def _load_relevance_penalties(supabase, user_id: str) -> dict:
+    """
+    Personalization signals from "Not relevant" job feedback (job_feedback
+    columns; written by POST .../job-feedback). Returns:
+      {"exclude_companies": set[str lowercase],   # reason='company'
+       "demote_title_tokens": set[str]}           # reason='wrong_role'
+    Best-effort — any failure (including unmigrated columns) returns empty
+    penalties and matching proceeds unpersonalized.
+    """
+    empty = {"exclude_companies": set(), "demote_title_tokens": set()}
+    try:
+        resp = (
+            supabase.table("user_jobs")
+            .select("job_feedback_reason, jobs(title, company)")
+            .eq("user_id", user_id)
+            .eq("job_feedback", "not_relevant")
+            .execute()
+        )
+    except Exception as e:
+        logger.info(f"   No relevance penalties loaded ({e}) — matching unpersonalized.")
+        return empty
+
+    penalties = {"exclude_companies": set(), "demote_title_tokens": set()}
+    for row in resp.data or []:
+        job = row.get("jobs") or {}
+        reason = row.get("job_feedback_reason") or ""
+        if reason == "company" and job.get("company"):
+            penalties["exclude_companies"].add(str(job["company"]).strip().lower())
+        elif reason == "wrong_role" and job.get("title"):
+            penalties["demote_title_tokens"] |= {w for w in _tokenize(job["title"]) if len(w) >= 3}
+    return penalties
+
+
+def _apply_relevance_penalties(jobs: list[dict], penalties: dict) -> list[dict]:
+    """Drop excluded-company jobs; halve the score of wrong-role lookalikes.
+    Jobs must carry match_score already; order is re-sorted afterward by
+    the caller's pipeline (scored sort / _prioritize_fresh)."""
+    if not penalties["exclude_companies"] and not penalties["demote_title_tokens"]:
+        return jobs
+    result = []
+    for job in jobs:
+        company = str(job.get("company") or "").strip().lower()
+        if company and company in penalties["exclude_companies"]:
+            continue
+        if penalties["demote_title_tokens"]:
+            title_tokens = {w for w in _tokenize(job.get("title", "")) if len(w) >= 3}
+            # Two shared meaningful title words = same kind of role the
+            # user already rejected; one shared word ("senior", "remote"
+            # never make it here due to length/meaning, but "developer"
+            # alone shouldn't tank everything) is not enough.
+            if len(title_tokens & penalties["demote_title_tokens"]) >= 2:
+                job = {**job, "match_score": round((job.get("match_score") or 0) * _WRONG_ROLE_DEMOTION, 4)}
+        result.append(job)
+    return result
+
 
 async def embed_user_profile(user: dict) -> list[float]:
     """
@@ -181,6 +242,7 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
     logger.info(f"🎯 Matching jobs for user: {user.get('name', user_id)}")
 
     seen = await _get_seen_job_ids(supabase, user_id)
+    penalties = await _load_relevance_penalties(supabase, user_id)
     overfetch = min(limit * _OVERFETCH_MULTIPLIER, _OVERFETCH_CAP)
 
     # 2. Try AI vector matching (Gemini embedding + pgvector). Any failure here
@@ -221,6 +283,9 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
             else:
                 relevant = jobs
 
+            relevant = _apply_relevance_penalties(relevant, penalties)
+            relevant.sort(key=lambda j: j.get("match_score") or 0, reverse=True)
+
             if relevant:
                 fresh_jobs = _prioritize_fresh(relevant, seen, limit)
                 logger.info(
@@ -242,10 +307,14 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
         .limit(300)
         .execute()
     )
-    return keyword_match(user, recent.data or [], limit, seen=seen)
+    return keyword_match(user, recent.data or [], limit, seen=seen, penalties=penalties)
 
 
-def keyword_match(user: dict, jobs: list[dict], limit: int, seen: dict[str, str] | None = None) -> list[dict]:
+def keyword_match(
+    user: dict, jobs: list[dict], limit: int,
+    seen: dict[str, str] | None = None,
+    penalties: dict | None = None,
+) -> list[dict]:
     """
     Score jobs by overlap between the user's roles/skills/tools/category and each
     job's title + description. Pure text — no embeddings, no AI. Used when vector
@@ -260,8 +329,17 @@ def keyword_match(user: dict, jobs: list[dict], limit: int, seen: dict[str, str]
     category one.
     """
     seen = seen or {}
+    penalties = penalties or {"exclude_companies": set(), "demote_title_tokens": set()}
     user_category = (user.get("job_category") or "").strip()
     candidates = [j for j in jobs if _category_relevant(j, user_category, _category_terms(user))]
+    # Excluded companies are dropped before scoring (a hard "never again");
+    # wrong-role title demotion must wait until AFTER scoring — it works by
+    # multiplying match_score, which doesn't exist yet on raw candidates.
+    if penalties["exclude_companies"]:
+        candidates = [
+            j for j in candidates
+            if str(j.get("company") or "").strip().lower() not in penalties["exclude_companies"]
+        ]
 
     terms = _user_terms(user)
     if not terms:
@@ -280,6 +358,12 @@ def keyword_match(user: dict, jobs: list[dict], limit: int, seen: dict[str, str]
             score = round(min(0.98, 0.5 + raw), 4)
             if score >= MIN_KEYWORD_SCORE:
                 scored.append({**job, "match_score": score})
+
+    # Wrong-role demotion (halves match_score), then re-apply the floor —
+    # a demoted lookalike dropping below MIN_KEYWORD_SCORE is the intended
+    # outcome, not a survivor with a small number.
+    scored = _apply_relevance_penalties(scored, penalties)
+    scored = [j for j in scored if j["match_score"] >= MIN_KEYWORD_SCORE]
 
     scored.sort(key=lambda j: j["match_score"], reverse=True)
     if scored:

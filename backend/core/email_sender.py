@@ -96,6 +96,44 @@ class _IPv4SMTP(smtplib.SMTP):
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 MAX_JOBS_PER_EMAIL = 5
+
+# ── Gmail circuit breaker ─────────────────────────────────────────────────────
+# Some VPS providers (Hostinger included) block outbound SMTP ports entirely,
+# and every Gmail attempt then burns two ~20s connection timeouts (465 + 587)
+# per email before failing over to Resend. Connection-level failures (OSError:
+# refused/timeout/unreachable — NOT auth errors) are counted; after
+# _GMAIL_BREAKER_THRESHOLD consecutive ones, Gmail is skipped for the rest of
+# this process's uptime. A restart (deploy) retries it fresh, so a fixed
+# firewall doesn't need a config change to take effect.
+_GMAIL_BREAKER_THRESHOLD = 2
+_gmail_consecutive_connection_failures = 0
+_gmail_breaker_tripped = False
+
+
+def _record_gmail_result(error: Exception | None) -> None:
+    global _gmail_consecutive_connection_failures, _gmail_breaker_tripped
+    if error is None:
+        _gmail_consecutive_connection_failures = 0
+        return
+    # smtplib.SMTPException subclasses OSError (since 3.4), so "is OSError"
+    # alone would count protocol-level failures (auth rejected, recipient
+    # refused) as connection failures. Only genuine transport problems count:
+    # raw socket errors (refused/timeout/unreachable) and SMTP's own
+    # connect/disconnect errors.
+    is_connection_failure = (
+        isinstance(error, OSError) and not isinstance(error, smtplib.SMTPException)
+    ) or isinstance(error, (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected))
+    if is_connection_failure:
+        _gmail_consecutive_connection_failures += 1
+        if _gmail_consecutive_connection_failures >= _GMAIL_BREAKER_THRESHOLD and not _gmail_breaker_tripped:
+            _gmail_breaker_tripped = True
+            logger.error(
+                "XXXXX Gmail SMTP appears unreachable from this host "
+                f"({_gmail_consecutive_connection_failures} consecutive connection failures) — "
+                "skipping Gmail for all remaining sends this uptime and using Resend only. "
+                "Check whether the VPS provider blocks outbound ports 465/587 "
+                "(test with: nc -zv smtp.gmail.com 587). Redeploy/restart to retry Gmail. XXXXX"
+            )
 # Tailored-resume PDFs get ATTACHED to the digest (not just linked) so the
 # user can forward one straight to a recruiter. Caps keep the message well
 # under provider size limits (Gmail 25MB) and download time bounded.
@@ -222,6 +260,16 @@ def _send_via_resend(
     # restriction. Until then, the shared onboarding sender is the only
     # address Resend accepts.
     from_addr = settings.email_from if settings.email_from and "example.com" not in settings.email_from else "onboarding@resend.dev"
+    if from_addr == "onboarding@resend.dev" and to_email.strip().lower() != settings.founder_email.strip().lower():
+        # Resend's shared test sender only reliably delivers to the Resend
+        # ACCOUNT OWNER's own inbox — sends to anyone else are typically
+        # rejected or dropped even though the API call itself succeeds.
+        # This is the "email says sent but never arrives" failure mode.
+        logger.warning(
+            f"   ⚠ Resend is sending to {to_email} from the shared test domain (onboarding@resend.dev). "
+            "This usually only delivers to the Resend account owner's address — other recipients may "
+            "never receive it. Verify a domain on Resend and set EMAIL_FROM to fix this."
+        )
     payload = {
         "from": f"{settings.email_from_name} <{from_addr}>",
         "to": [to_email],
@@ -263,16 +311,20 @@ async def _send_email(
     attempted = False
     last_error: Exception | None = None
 
-    if settings.gmail_user and settings.gmail_app_password:
+    if settings.gmail_user and settings.gmail_app_password and not _gmail_breaker_tripped:
         if check_budget("gmail", settings.gmail_daily_limit):
             for attempt in range(2):
                 attempted = True
                 try:
                     await asyncio.to_thread(_send_via_gmail, to_email, subject, html, unsubscribe_url, attachments)
+                    _record_gmail_result(None)
                     return "gmail"
                 except Exception as e:
                     last_error = e
+                    _record_gmail_result(e)
                     logger.warning(f"   Gmail send failed (attempt {attempt + 1}/2): {e}")
+                    if _gmail_breaker_tripped:
+                        break
                     if attempt == 0 and isinstance(e, OSError):
                         await asyncio.sleep(2)
                         continue
@@ -294,6 +346,20 @@ async def _send_email(
     if not attempted:
         logger.info("   No email provider configured, or all configured providers are over today's budget — skipping email.")
     return None
+
+
+def _insert_email_log(supabase, row: dict) -> None:
+    """Insert into email_logs; `provider` is a newer column, so retry the
+    insert without it if the migration hasn't been run yet (same progressive
+    pattern used across the codebase). Logging must never break a send."""
+    try:
+        supabase.table("email_logs").insert(row).execute()
+    except Exception:
+        slim = {k: v for k, v in row.items() if k != "provider"}
+        try:
+            supabase.table("email_logs").insert(slim).execute()
+        except Exception:
+            pass
 
 
 def _already_sent_today(supabase, user_id: str) -> bool:
@@ -411,7 +477,7 @@ async def send_morning_digest(user_id: str) -> bool:
         if provider is None:
             return False
 
-        supabase.table("email_logs").insert({**log_row, "status": "sent"}).execute()
+        _insert_email_log(supabase, {**log_row, "status": "sent", "provider": provider})
         match_ids = [m["id"] for m in matches]
         supabase.table("user_jobs").update({"status": "emailed"}).in_("id", match_ids).execute()
         logger.info(f"   ✅ Digest sent to {user['email']} via {provider} ({len(jobs_data)} jobs)")
@@ -419,10 +485,7 @@ async def send_morning_digest(user_id: str) -> bool:
 
     except Exception as e:
         logger.error(f"   ❌ Email failed for {user['email']}: {e}")
-        try:
-            supabase.table("email_logs").insert({**log_row, "status": "failed", "error_message": str(e)}).execute()
-        except Exception:
-            pass
+        _insert_email_log(supabase, {**log_row, "status": "failed", "error_message": str(e)})
         try:
             from core.pipeline_runner import send_admin_alert
             await send_admin_alert(
@@ -516,15 +579,12 @@ async def send_weekly_summary(user_id: str) -> bool:
         provider = await _send_email(user["email"], subject, html, unsubscribe_url)
         if provider is None:
             return False
-        supabase.table("email_logs").insert({**log_row, "status": "sent"}).execute()
+        _insert_email_log(supabase, {**log_row, "status": "sent", "provider": provider})
         logger.info(f"   ✅ Weekly summary sent to {user['email']} via {provider}")
         return True
     except Exception as e:
         logger.error(f"   ❌ Weekly summary failed for {user['email']}: {e}")
-        try:
-            supabase.table("email_logs").insert({**log_row, "status": "failed", "error_message": str(e)}).execute()
-        except Exception:
-            pass
+        _insert_email_log(supabase, {**log_row, "status": "failed", "error_message": str(e)})
         return False
 
 

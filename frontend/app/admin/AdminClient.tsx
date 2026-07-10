@@ -72,6 +72,7 @@ interface EmailLogRow {
   type: string;
   status: string;
   subject: string | null;
+  provider: string | null;
   error_message: string | null;
   sent_at: string | null;
 }
@@ -628,6 +629,7 @@ export default function AdminClient() {
                         <th className="px-2 py-2 font-semibold">To</th>
                         <th className="px-2 py-2 font-semibold">Type</th>
                         <th className="px-2 py-2 font-semibold">Status</th>
+                        <th className="px-2 py-2 font-semibold">Via</th>
                         <th className="px-2 py-2 font-semibold">Detail</th>
                       </tr>
                     </thead>
@@ -647,6 +649,7 @@ export default function AdminClient() {
                               {row.status}
                             </span>
                           </td>
+                          <td className="px-2 py-2.5 text-xs" style={{ color: "var(--text-muted)" }}>{row.provider || "—"}</td>
                           <td className="px-2 py-2.5 text-xs" style={{ color: "var(--text-muted)" }}>
                             {row.status === "sent" ? row.subject : row.error_message || "—"}
                           </td>

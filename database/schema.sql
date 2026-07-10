@@ -362,6 +362,38 @@ ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS job_feedback_reason TEXT;  -- wro
 ALTER TABLE users ADD COLUMN IF NOT EXISTS resume_quota_override INTEGER;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS job_count_override    INTEGER;
 
+-- ── Job-seeker sprint (2026-07-10) ─────────────────────────────────────────
+-- Run this whole block once in the Supabase SQL Editor (idempotent).
+
+-- Which provider actually delivered each email (gmail/resend) — the key
+-- diagnostic for "marked sent but never arrived" (Resend's shared test
+-- domain only reliably delivers to the Resend account owner).
+ALTER TABLE email_logs ADD COLUMN IF NOT EXISTS provider TEXT;
+
+-- Multi-category matching: primary job_category stays the main identity;
+-- these broaden which fetched-job categories count as relevant.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS secondary_categories TEXT[] DEFAULT '{}';
+
+-- Salary transparency — stored only when the source API provides it;
+-- the UI shows "Salary not disclosed" otherwise (never invented).
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_min      NUMERIC;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_max      NUMERIC;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_currency TEXT;
+
+-- Application tracker — strictly user-asserted status transitions
+-- (applied|interviewing|offer|rejected), never inferred.
+ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS application_status            TEXT;
+ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS application_status_updated_at TIMESTAMPTZ;
+
+-- "Why this matched" — components the matcher actually computed for this
+-- row (matched terms, title overlap, vector similarity). Only ever filled
+-- with real computed values.
+ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS match_breakdown JSONB;
+
+-- Admin quota overrides can now expire — scheduler clears them past this.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS override_expires_at TIMESTAMPTZ;
+-- ── End job-seeker sprint block ────────────────────────────────────────────
+
 -- Admin audit trail (T-016) — every sensitive admin action: inspect views,
 -- signed resume-URL issuance, quota changes, deletions, pipeline triggers.
 -- Single shared ADMIN_TOKEN today, so no admin identity column yet; the

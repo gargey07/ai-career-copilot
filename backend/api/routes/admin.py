@@ -281,19 +281,33 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
     email_by_user = {u["id"]: u.get("email") for u in users}
     email_history = []
     try:
-        logs_resp = (
-            supabase.table("email_logs")
-            .select("user_id, email_address, type, status, subject, error_message, sent_at")
-            .order("sent_at", desc=True)
-            .limit(50)
-            .execute()
-        )
+        # provider is a newer column — retry the select without it so an
+        # un-run migration degrades to history-without-provider, not no
+        # history at all.
+        base_cols = "user_id, email_address, type, status, subject, error_message, sent_at"
+        try:
+            logs_resp = (
+                supabase.table("email_logs")
+                .select(f"{base_cols}, provider")
+                .order("sent_at", desc=True)
+                .limit(50)
+                .execute()
+            )
+        except Exception:
+            logs_resp = (
+                supabase.table("email_logs")
+                .select(base_cols)
+                .order("sent_at", desc=True)
+                .limit(50)
+                .execute()
+            )
         email_history = [
             {
                 "user_email": row.get("email_address") or email_by_user.get(row.get("user_id"), ""),
                 "type": row.get("type"),
                 "status": row.get("status"),
                 "subject": row.get("subject"),
+                "provider": row.get("provider"),
                 "error_message": row.get("error_message"),
                 "sent_at": row.get("sent_at"),
             }

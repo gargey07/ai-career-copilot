@@ -80,7 +80,7 @@
 |-----------|-----------|
 | Primary Model | Gemini 1.5 Flash (free tier first) |
 | Interface | Abstracted AI class (swappable) |
-| Embeddings | Gemini Embedding Model / sentence-transformers |
+| Embeddings | Gemini Embedding Model |
 | Fallback | OpenAI GPT-4o-mini |
 
 ### PDF Generation
@@ -205,7 +205,7 @@ AI is only invoked for the **Top 3 jobs per user**.
 
 ### Rule 4: Use Cheapest Viable Model
 - Gemini 1.5 Flash: free tier (1500 req/day), costs ~$0.075/1M tokens paid
-- Embeddings: sentence-transformers locally (zero cost)
+- Embeddings: Gemini embedding model (separate, much larger free-tier quota than generation)
 
 ### Cost Estimate at Scale
 ```

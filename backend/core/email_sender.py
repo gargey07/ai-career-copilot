@@ -143,7 +143,7 @@ MAX_TOTAL_ATTACHMENT_BYTES = 7 * 1024 * 1024
 
 def _render_email_html(
     user_name: str, jobs: list[dict], dashboard_url: str, unsubscribe_url: str,
-    has_attachments: bool = False,
+    has_attachments: bool = False, more_on_dashboard: int = 0,
 ) -> str:
     env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
     template = env.get_template("email_digest.html")
@@ -153,6 +153,7 @@ def _render_email_html(
         jobs=jobs,
         has_resumes=any(j.get("pdf_url") for j in jobs),
         has_attachments=has_attachments,
+        more_on_dashboard=more_on_dashboard,
         dashboard_url=dashboard_url,
         unsubscribe_url=unsubscribe_url,
     )
@@ -413,16 +414,21 @@ async def send_morning_digest(user_id: str) -> bool:
         logger.info(f"   Digest already sent today to {user['email']} — skipping.")
         return False
 
+    # Fetch ALL of today's matches, email the top MAX_JOBS_PER_EMAIL, and
+    # tell the user how many more are on the dashboard — matching stores up
+    # to MAX_JOBS_PER_USER (10) while the email shows 5, and silently hiding
+    # the rest made the two surfaces disagree for no stated reason.
     matches_resp = (
         supabase.table("user_jobs")
         .select("id, match_score, pdf_url, status, jobs(title, company, location, source_url, source, is_remote)")
         .eq("user_id", user_id)
         .eq("digest_date", today)
         .order("match_score", desc=True)
-        .limit(MAX_JOBS_PER_EMAIL)
         .execute()
     )
-    matches = matches_resp.data or []
+    all_matches = matches_resp.data or []
+    matches = all_matches[:MAX_JOBS_PER_EMAIL]
+    more_on_dashboard = max(0, len(all_matches) - len(matches))
     if not matches:
         logger.info(f"   No matches today for {user['email']} — nothing to email.")
         return False
@@ -463,7 +469,7 @@ async def send_morning_digest(user_id: str) -> bool:
     subject = f"Your top {len(jobs_data)} job match{'es' if len(jobs_data) != 1 else ''} — {date.today().strftime('%b %d')}"
     html = _render_email_html(
         user.get("name", ""), jobs_data, dashboard_url, unsubscribe_url,
-        has_attachments=bool(attachments),
+        has_attachments=bool(attachments), more_on_dashboard=more_on_dashboard,
     )
 
     log_row = {

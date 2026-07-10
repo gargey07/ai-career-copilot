@@ -11,6 +11,7 @@ the no-resume "start from scratch" path saves a profile.
 """
 from __future__ import annotations
 import logging
+from datetime import date
 from typing import Optional
 from urllib.parse import urlparse
 import re
@@ -356,9 +357,37 @@ async def _match_new_user(user_id: str) -> None:
         logger.warning(f"⚠️  Instant resume generation failed for {user_id}: {e}")
 
 
+def _already_matched_today(supabase, user_id: str) -> bool:
+    """True when this user already has matches for today. A profile EDIT
+    (confirm re-runs as an upsert) must not re-burn job-API and AI budget
+    on a full fetch+match+optimize cycle the user already got — tomorrow's
+    pipeline picks up the edited profile. Best-effort: on any failure say
+    False, because skipping a NEW user's first match is the worse outcome."""
+    try:
+        resp = (
+            supabase.table("user_jobs")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("digest_date", date.today().isoformat())
+            .limit(1)
+            .execute()
+        )
+        return bool(resp.data)
+    except Exception:
+        return False
+
+
 @router.post("/confirm")
-async def confirm_profile(payload: ConfirmProfileRequest, background_tasks: BackgroundTasks):
+async def confirm_profile(payload: ConfirmProfileRequest, request: Request, background_tasks: BackgroundTasks):
     supabase = get_supabase()
+
+    # Cost guard: /confirm schedules real job fetching + AI resume
+    # generation. Unlimited unauthenticated re-confirms were a free way to
+    # burn the day's entire fetch/AI budget (same per-IP pattern as
+    # /upload; generous enough for legitimate signup + a few edits).
+    client_ip = _client_ip(request)
+    if not check_budget(f"profile_confirm_ip_{client_ip}", settings.profile_confirm_daily_limit_per_ip):
+        raise HTTPException(429, "Too many profile saves today. Please try again tomorrow.")
     profile_dict = payload.model_dump()
     resume_text = build_resume_text_from_profile(profile_dict)
 
@@ -410,7 +439,10 @@ async def confirm_profile(payload: ConfirmProfileRequest, background_tasks: Back
         raise HTTPException(500, "Failed to save profile.")
 
     user_id = resp.data[0]["id"]
-    background_tasks.add_task(_match_new_user, user_id)
+    if _already_matched_today(supabase, user_id):
+        logger.info(f"   Profile edit for {user_id} — matches already exist today, skipping re-fetch/re-match.")
+    else:
+        background_tasks.add_task(_match_new_user, user_id)
     # The signed token is the user's key to their own dashboard — dashboard
     # endpoints no longer accept a bare user_id (core/access_token.py).
     from core.access_token import generate_dashboard_token

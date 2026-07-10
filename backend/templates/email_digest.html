@@ -151,6 +151,12 @@
       {% endfor %}
     </div>
 
+    {% if more_on_dashboard and more_on_dashboard > 0 %}
+    <p style="text-align:center; font-size:13px; color:#64748B; margin:18px 0 0;">
+      Plus {{ more_on_dashboard }} more match{{ 'es' if more_on_dashboard != 1 else '' }} waiting on your dashboard.
+    </p>
+    {% endif %}
+
     {% if dashboard_url %}
     <div class="dashboard-cta">
       <a href="{{ dashboard_url }}" target="_blank">Open your dashboard</a>

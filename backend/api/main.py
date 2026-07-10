@@ -100,6 +100,20 @@ async def _scheduler_tick() -> None:
     supabase = get_supabase()
     now_hhmm = datetime.now(IST).strftime("%H:%M")
 
+    # Auto-expire admin quota overrides past their override_expires_at —
+    # a temporary boost for a testing week must not silently become
+    # permanent. Best-effort every tick (single indexed-where UPDATE);
+    # pre-migration DBs (no column) just skip it.
+    try:
+        from datetime import timezone as _tz
+        supabase.table("users").update({
+            "resume_quota_override": None,
+            "job_count_override": None,
+            "override_expires_at": None,
+        }).lt("override_expires_at", datetime.now(_tz.utc).isoformat()).execute()
+    except Exception:
+        pass
+
     # preferred_digest_time is a newer column — fall back to the global
     # default for everyone if the migration hasn't run.
     try:

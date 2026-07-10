@@ -44,6 +44,7 @@ interface AdminUserRow {
   dashboard_token?: string;
   resume_quota_override?: number | null;
   job_count_override?: number | null;
+  override_expires_at?: string | null;
   matches_total: number;
   matches_today: number;
   resumes_ready: number;
@@ -150,12 +151,14 @@ function DeleteUserButton({ token, userId, email, onDeleted }: { token: string; 
 function OverridesEditor({ token, user, onSaved }: { token: string; user: AdminUserRow; onSaved: () => void }) {
   const [resumeQuota, setResumeQuota] = useState(user.resume_quota_override?.toString() ?? "");
   const [jobCount, setJobCount] = useState(user.job_count_override?.toString() ?? "");
+  const [expires, setExpires] = useState((user.override_expires_at ?? "").slice(0, 10));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   const dirty =
     resumeQuota !== (user.resume_quota_override?.toString() ?? "") ||
-    jobCount !== (user.job_count_override?.toString() ?? "");
+    jobCount !== (user.job_count_override?.toString() ?? "") ||
+    expires !== (user.override_expires_at ?? "").slice(0, 10);
 
   const save = async () => {
     if (!dirty || saving) return;
@@ -167,6 +170,7 @@ function OverridesEditor({ token, user, onSaved }: { token: string; user: AdminU
         body: JSON.stringify({
           resume_quota_override: resumeQuota.trim() === "" ? null : Number(resumeQuota),
           job_count_override: jobCount.trim() === "" ? null : Number(jobCount),
+          override_expires_at: expires.trim() === "" ? null : expires,
         }),
       });
       if (res.ok) {
@@ -202,6 +206,16 @@ function OverridesEditor({ token, user, onSaved }: { token: string; user: AdminU
         className={inputCls}
         style={inputStyle}
         aria-label="Job count override"
+      />
+      <input
+        type="date"
+        value={expires}
+        onChange={(e) => setExpires(e.target.value)}
+        onBlur={save}
+        className="px-1.5 py-1 rounded text-xs outline-none focus:border-[var(--primary)]"
+        style={{ ...inputStyle, width: 118 }}
+        aria-label="Override expiry date"
+        title="Overrides auto-clear after this date. Blank = no expiry."
       />
       {saved && <span className="text-xs" style={{ color: "var(--success)" }}>✓</span>}
     </div>

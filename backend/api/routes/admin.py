@@ -99,6 +99,10 @@ class OverridesUpdate(BaseModel):
     # None = clear the override (fall back to the global setting).
     resume_quota_override: int | None = None
     job_count_override: int | None = None
+    # ISO date/datetime after which the scheduler auto-clears both overrides
+    # — a boost for a testing week shouldn't silently stay forever. None =
+    # no expiry (and clears any previously-set expiry).
+    override_expires_at: str | None = None
 
 
 @router.patch("/users/{user_id}/overrides")
@@ -115,9 +119,18 @@ async def update_overrides(user_id: str, payload: OverridesUpdate, token: str = 
             return None
         return max(0, min(int(v), hi))
 
+    expires_at = None
+    if payload.override_expires_at:
+        try:
+            from datetime import datetime as _dt
+            expires_at = _dt.fromisoformat(payload.override_expires_at.replace("Z", "+00:00")).isoformat()
+        except ValueError:
+            raise HTTPException(400, "override_expires_at must be an ISO date/datetime, e.g. 2026-07-20")
+
     update = {
         "resume_quota_override": clamp(payload.resume_quota_override, 20),
         "job_count_override": clamp(payload.job_count_override, 50),
+        "override_expires_at": expires_at,
     }
     supabase = get_supabase()
     old = {}
@@ -129,8 +142,15 @@ async def update_overrides(user_id: str, payload: OverridesUpdate, token: str = 
     try:
         supabase.table("users").update(update).eq("id", user_id).execute()
     except Exception as e:
-        logger.error(f"   Override update failed for {user_id}: {e}")
-        raise HTTPException(500, "Couldn't save overrides — the override columns may not be migrated yet.")
+        # override_expires_at is the newest column of the three — retry
+        # without it so a pre-migration DB still accepts plain overrides.
+        try:
+            slim = {k: v for k, v in update.items() if k != "override_expires_at"}
+            supabase.table("users").update(slim).eq("id", user_id).execute()
+            update = slim
+        except Exception:
+            logger.error(f"   Override update failed for {user_id}: {e}")
+            raise HTTPException(500, "Couldn't save overrides — the override columns may not be migrated yet.")
 
     _audit("overrides_changed", user_id, {"old": old, "new": update})
     return {"status": "ok", **update}
@@ -177,17 +197,25 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
     try:
         users_resp = (
             supabase.table("users")
-            .select(f"{base_user_fields}, resume_quota_override, job_count_override")
+            .select(f"{base_user_fields}, resume_quota_override, job_count_override, override_expires_at")
             .order("created_at", desc=True)
             .execute()
         )
     except Exception:
-        users_resp = (
-            supabase.table("users")
-            .select(base_user_fields)
-            .order("created_at", desc=True)
-            .execute()
-        )
+        try:
+            users_resp = (
+                supabase.table("users")
+                .select(f"{base_user_fields}, resume_quota_override, job_count_override")
+                .order("created_at", desc=True)
+                .execute()
+            )
+        except Exception:
+            users_resp = (
+                supabase.table("users")
+                .select(base_user_fields)
+                .order("created_at", desc=True)
+                .execute()
+            )
     users = users_resp.data or []
 
     # All match rows — aggregated per user in Python (beta-scale data; a few
@@ -238,6 +266,7 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
             "dashboard_token": generate_dashboard_token(u["id"]),
             "resume_quota_override": u.get("resume_quota_override"),
             "job_count_override": u.get("job_count_override"),
+            "override_expires_at": u.get("override_expires_at"),
             **per_user.get(u["id"], empty_stats),
         }
         for u in users

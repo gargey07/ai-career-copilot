@@ -133,6 +133,10 @@ class Settings(BaseSettings):
     resend_daily_limit: int = 100          # Resend free tier
     gmail_daily_limit: int = 100           # stay far under Gmail's ~500/day send cap
     resume_parse_daily_limit_per_ip: int = 10  # abuse/cost guard on re-uploads; keyed by client IP (no auth yet)
+    # /resumes/confirm schedules real job fetching + AI generation; without a
+    # cap, repeated unauthenticated confirms could drain the whole day's
+    # budget. Generous enough for a signup plus several profile edits.
+    profile_confirm_daily_limit_per_ip: int = 10
 
     # Shared secret to authorize the manual pipeline trigger (POST /api/admin/run-pipeline).
     # Empty = trigger disabled (safe default). Set ADMIN_TOKEN on the server to enable.

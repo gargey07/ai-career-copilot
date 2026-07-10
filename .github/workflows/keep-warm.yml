@@ -1,19 +1,9 @@
-# Render's free tier spins the backend down after ~15 minutes of no traffic,
-# and the next visitor then eats a ~50-second cold start. This pings /health
-# every 10 minutes so the service (usually) stays warm during the day.
-#
-# ⚠ BACKUP ONLY — do not trust this as the primary keep-warm. Measured in
-# production (July 2026): GitHub actually ran this "*/10" schedule every
-# 1–3 HOURS (08:29, 05:10, 01:20, 23:46, …) — GitHub throttles scheduled
-# workflows far below their nominal cadence, so the service still slept
-# most of the day. The PRIMARY keep-warm is a Supabase pg_cron job pinging
-# /health every 5 minutes — see the "KEEP-WARM" block in
-# database/schema.sql. This workflow stays as a redundant fallback.
-#
-# Notes:
-# - GitHub schedules only run on the default branch (main).
-# - Render free instances get 750 running hours/month; one always-warm
-#   service (~720h) fits inside that.
+# OBSOLETE as of the 2026-07-10 Render → Coolify/Hostinger VPS migration.
+# This existed to fight Render free-tier's ~15-minute idle sleep; the
+# backend now runs on an always-on VPS, so there's nothing to keep warm.
+# Left in place (URL fixed below) only as an optional external health
+# ping — safe to delete this file, or disable it in the Actions tab, at
+# any time.
 name: Keep backend warm
 
 on:
@@ -31,4 +21,4 @@ jobs:
           # --max-time 90 tolerates a cold start; never fail the workflow —
           # a missed ping just means the next one wakes the service.
           curl --silent --show-error --max-time 90 \
-            https://ai-career-copilot-api-nyaa.onrender.com/health || true
+            http://n99tn44btm3ff0rx5pppaoqp.200.97.165.139.sslip.io/health || true

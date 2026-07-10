@@ -399,19 +399,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS email_logs_one_digest_per_day
   WHERE status = 'sent';
 
 -- ============================================================
--- KEEP-WARM — primary defense against Render free-tier sleep
--- Render spins the backend down after ~15 idle minutes (~50s cold start
--- for the next visitor). The GitHub Actions pinger proved unreliable:
--- its "*/10" schedule actually fired every 1–3 hours in practice.
--- pg_cron + pg_net (both available on Supabase free tier) ping /health
--- every 5 minutes straight from the database — reliable and $0.
--- Run this block once in the Supabase SQL Editor.
+-- KEEP-WARM — OBSOLETE as of the 2026-07-10 Render → Coolify/Hostinger
+-- VPS migration. The backend now runs on an always-on VPS, so the
+-- Render free-tier sleep problem this job existed for no longer applies.
+-- Run this once in the Supabase SQL Editor to stop the old job pinging
+-- the now-decommissioned Render URL every 5 minutes (errors with "could
+-- not find valid entry for job" if it was already removed — harmless):
+--   select cron.unschedule('keep-render-warm');
 -- ============================================================
-create extension if not exists pg_cron;
-create extension if not exists pg_net;
-select cron.schedule(
-  'keep-render-warm',
-  '*/5 * * * *',
-  $$ select net.http_get('https://ai-career-copilot-api-nyaa.onrender.com/health') $$
-);
--- To stop it later: select cron.unschedule('keep-render-warm');

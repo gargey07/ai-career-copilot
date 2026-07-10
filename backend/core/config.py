@@ -119,7 +119,15 @@ class Settings(BaseSettings):
     # via env vars rather than editing code.
     adzuna_daily_limit: int = 200          # Adzuna free tier
     jsearch_daily_limit: int = 5           # RapidAPI JSearch free tiers are usually ~150/month
-    gemini_generate_daily_limit: int = 1000
+    # Google's own 429 response on this free-tier key reports the REAL cap:
+    # "GenerateRequestsPerDayPerProjectPerModel-FreeTier ... limit: 20,
+    # model: gemini-2.5-flash" (observed 2026-07-10) — 1000 was an
+    # aspirational placeholder that let check_budget wave every call through
+    # long after Google itself was already rejecting them, burning a real
+    # network round-trip on a guaranteed-429 for the rest of every day past
+    # the ~20th generate call. Raise this via env var if the key is ever
+    # upgraded off the free tier.
+    gemini_generate_daily_limit: int = 20
     gemini_embed_daily_limit: int = 500
     openai_daily_limit: int = 50           # spend safety valve — OpenAI has no free quota
     resend_daily_limit: int = 100          # Resend free tier

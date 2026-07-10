@@ -3,6 +3,7 @@ import { BrandMark } from "@/components/BrandMark";
 import { NavCta } from "@/components/NavCta";
 import { HeroCtas } from "@/components/HeroCtas";
 import { WarmBackend } from "@/components/WarmBackend";
+import { RefCapture } from "@/components/RefCapture";
 import { AiDisclosure } from "@/components/AiDisclosure";
 import { BRAND_NAME } from "@/lib/brand";
 import type { LucideIcon } from "lucide-react";
@@ -24,11 +25,37 @@ const steps = [
   { num: "04", title: "Apply in Minutes", desc: "Open your morning briefing, pick a job, click apply. Done." },
 ];
 
+// Honest answers only (trust rule above) — these are the questions people
+// actually check before giving a job tool their resume.
+const faqs: { q: string; a: string }[] = [
+  {
+    q: "Is it really free?",
+    a: "Yes — completely free during the beta, no credit card, no trial countdown. If paid plans ever arrive, beta users will hear it from us first.",
+  },
+  {
+    q: "Does the AI make things up on my resume?",
+    a: "No. The AI only rearranges, rephrases, and highlights what's already in your resume to match each job. It never invents experience, skills, or achievements — that rule is built into the system.",
+  },
+  {
+    q: "What do you do with my resume and data?",
+    a: "Your resume is stored privately and used only to match jobs and tailor applications for you. We don't sell data or share it with recruiters. Deleting your account deletes your data.",
+  },
+  {
+    q: "Are the job listings verified?",
+    a: "Jobs come from public job boards. We can't verify whether a listing is still open, the poster's legitimacy, or salary accuracy — always double-check before applying. We say this everywhere because honesty beats hype.",
+  },
+  {
+    q: "Can I stop the emails?",
+    a: "Anytime — every email has a one-click unsubscribe. Unsubscribing stops emails only; your matches keep updating on your dashboard.",
+  },
+];
+
 export default function Home() {
   return (
     <main className="min-h-screen" style={{ background: "var(--bg)", color: "var(--text)" }}>
       {/* ── Nav ── */}
       <WarmBackend />
+      <RefCapture />
       <nav className="flex items-center justify-between px-6 py-5 max-w-6xl mx-auto">
         <BrandMark />
         <NavCta />
@@ -95,6 +122,26 @@ export default function Home() {
                 <p className="text-sm" style={{ color: "var(--text-muted)" }}>{step.desc}</p>
               </div>
             </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ── FAQ — the honest answers people check before trusting a job tool ── */}
+      <section className="px-6 py-20 max-w-3xl mx-auto">
+        <h2 className="text-center text-3xl font-bold mb-12" style={{ color: "var(--text)" }}>Common questions</h2>
+        <div className="space-y-4">
+          {faqs.map((f) => (
+            <details
+              key={f.q}
+              className="group rounded-lg px-5 py-4"
+              style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+            >
+              <summary className="cursor-pointer font-semibold text-sm list-none flex items-center justify-between" style={{ color: "var(--text)" }}>
+                {f.q}
+                <span className="transition group-open:rotate-45 text-lg leading-none" style={{ color: "var(--text-muted)" }}>+</span>
+              </summary>
+              <p className="mt-3 text-sm leading-relaxed" style={{ color: "var(--text-muted)" }}>{f.a}</p>
+            </details>
           ))}
         </div>
       </section>

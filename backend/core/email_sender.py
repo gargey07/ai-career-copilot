@@ -216,8 +216,14 @@ def _send_via_resend(
     import resend
 
     resend.api_key = settings.resend_api_key
+    # Once a custom domain is verified on Resend, set EMAIL_FROM on Render
+    # (e.g. hello@yourdomain.com) and sends switch to it automatically —
+    # that also lifts Resend's only-deliver-to-your-own-address free-tier
+    # restriction. Until then, the shared onboarding sender is the only
+    # address Resend accepts.
+    from_addr = settings.email_from if settings.email_from and "example.com" not in settings.email_from else "onboarding@resend.dev"
     payload = {
-        "from": f"{settings.email_from_name} <onboarding@resend.dev>",
+        "from": f"{settings.email_from_name} <{from_addr}>",
         "to": [to_email],
         "subject": subject,
         "html": html,

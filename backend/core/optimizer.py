@@ -230,15 +230,25 @@ async def run_optimizer_for_user(user_id: str) -> int:
     """
     supabase = get_supabase()
     today = date.today().isoformat()
-    ai_limit = settings.ai_jobs_per_user
 
-    # 1. Get user profile
-    user_resp = supabase.table("users").select("name, resume_text, skills, tools, job_category").eq("id", user_id).single().execute()
+    # 1. Get user profile (resume_quota_override is a newer column — degrade
+    #    to the global default pre-migration).
+    base_fields = "name, resume_text, skills, tools, job_category"
+    try:
+        user_resp = supabase.table("users").select(f"{base_fields}, resume_quota_override").eq("id", user_id).single().execute()
+    except Exception:
+        user_resp = supabase.table("users").select(base_fields).eq("id", user_id).single().execute()
     if not user_resp.data or not user_resp.data.get("resume_text"):
         logger.warning(f"⚠️  User {user_id} has no resume text — skipping AI optimization")
         return 0
 
     user = user_resp.data
+    # Per-user admin override (T-023) beats the global AI_JOBS_PER_USER cap.
+    override = user.get("resume_quota_override")
+    ai_limit = override if override is not None else settings.ai_jobs_per_user
+    if ai_limit <= 0:
+        logger.info(f"   Resume quota for user {user_id} is 0 — skipping AI optimization")
+        return 0
 
     # 2. Get today's top matches (only top N for AI, ranked by match_score).
     #    Select by WORK REMAINING (no resume text yet), not by status: the

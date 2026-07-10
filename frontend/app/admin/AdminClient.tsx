@@ -42,6 +42,8 @@ interface AdminUserRow {
   is_active: boolean;
   has_resume: boolean;
   dashboard_token?: string;
+  resume_quota_override?: number | null;
+  job_count_override?: number | null;
   matches_total: number;
   matches_today: number;
   resumes_ready: number;
@@ -49,6 +51,16 @@ interface AdminUserRow {
   interviewing: number;
   offered: number;
   last_digest_date: string | null;
+}
+interface PoolJob {
+  id: string;
+  title: string;
+  company: string | null;
+  location: string | null;
+  source: string | null;
+  search_category?: string | null;
+  collected_at: string | null;
+  source_url: string | null;
 }
 interface Funnel {
   signup_started: number;
@@ -129,6 +141,146 @@ function DeleteUserButton({ token, userId, email, onDeleted }: { token: string; 
       <Trash2 size={12} strokeWidth={2} />
       {deleting ? "Deleting…" : confirming ? "Confirm delete?" : "Delete"}
     </button>
+  );
+}
+
+// T-023: per-user limit overrides — blank = use the global default.
+// Saves on Enter/blur only when a value actually changed.
+function OverridesEditor({ token, user, onSaved }: { token: string; user: AdminUserRow; onSaved: () => void }) {
+  const [resumeQuota, setResumeQuota] = useState(user.resume_quota_override?.toString() ?? "");
+  const [jobCount, setJobCount] = useState(user.job_count_override?.toString() ?? "");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const dirty =
+    resumeQuota !== (user.resume_quota_override?.toString() ?? "") ||
+    jobCount !== (user.job_count_override?.toString() ?? "");
+
+  const save = async () => {
+    if (!dirty || saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/api/admin/users/${user.id}/overrides?token=${encodeURIComponent(token)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          resume_quota_override: resumeQuota.trim() === "" ? null : Number(resumeQuota),
+          job_count_override: jobCount.trim() === "" ? null : Number(jobCount),
+        }),
+      });
+      if (res.ok) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+        onSaved();
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const inputCls = "w-12 px-1.5 py-1 rounded text-xs text-center outline-none focus:border-[var(--primary)]";
+  const inputStyle = { border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)" };
+  return (
+    <div className="flex items-center gap-1.5" title="Per-user limits — resumes/day and jobs/day. Blank = default.">
+      <input
+        value={resumeQuota}
+        onChange={(e) => setResumeQuota(e.target.value.replace(/[^0-9]/g, ""))}
+        onBlur={save}
+        onKeyDown={(e) => e.key === "Enter" && save()}
+        placeholder="AI"
+        className={inputCls}
+        style={inputStyle}
+        aria-label="Resume quota override"
+      />
+      <input
+        value={jobCount}
+        onChange={(e) => setJobCount(e.target.value.replace(/[^0-9]/g, ""))}
+        onBlur={save}
+        onKeyDown={(e) => e.key === "Enter" && save()}
+        placeholder="jobs"
+        className={inputCls}
+        style={inputStyle}
+        aria-label="Job count override"
+      />
+      {saved && <span className="text-xs" style={{ color: "var(--success)" }}>✓</span>}
+    </div>
+  );
+}
+
+// T-023: search the shared jobs pool by title — the QA tool for
+// "does category X actually return good jobs?"
+function JobsPoolSearch({ token }: { token: string }) {
+  const [q, setQ] = useState("");
+  const [jobs, setJobs] = useState<PoolJob[] | null>(null);
+  const [searching, setSearching] = useState(false);
+
+  const search = async () => {
+    setSearching(true);
+    try {
+      const res = await fetch(`${API_URL}/api/admin/jobs?token=${encodeURIComponent(token)}&q=${encodeURIComponent(q)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setJobs(data.jobs || []);
+      }
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex gap-2 mb-4">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && search()}
+          placeholder="Search job titles… (empty = newest 50)"
+          className="flex-1 px-3 py-2 rounded-md text-sm outline-none focus:border-[var(--primary)]"
+          style={{ border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)" }}
+        />
+        <Button variant="secondary" onClick={search} disabled={searching}>
+          {searching ? "Searching…" : "Search"}
+        </Button>
+      </div>
+      {jobs !== null && (
+        jobs.length === 0 ? (
+          <p className="text-sm" style={{ color: "var(--text-muted)" }}>No jobs matched that title.</p>
+        ) : (
+          <div className="overflow-x-auto -mx-2">
+            <table className="w-full text-sm" style={{ minWidth: 700 }}>
+              <thead>
+                <tr className="text-left text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+                  <th className="px-2 py-2 font-semibold">Title</th>
+                  <th className="px-2 py-2 font-semibold">Company</th>
+                  <th className="px-2 py-2 font-semibold">Category</th>
+                  <th className="px-2 py-2 font-semibold">Source</th>
+                  <th className="px-2 py-2 font-semibold">Collected</th>
+                </tr>
+              </thead>
+              <tbody>
+                {jobs.map((j) => (
+                  <tr key={j.id} style={{ borderTop: "1px solid var(--border)" }}>
+                    <td className="px-2 py-2.5 text-xs" style={{ color: "var(--text)" }}>
+                      {j.source_url ? (
+                        <a href={j.source_url} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: "var(--primary)" }}>
+                          {j.title}
+                        </a>
+                      ) : j.title}
+                    </td>
+                    <td className="px-2 py-2.5 text-xs" style={{ color: "var(--text-muted)" }}>{j.company || "—"}</td>
+                    <td className="px-2 py-2.5 text-xs" style={{ color: "var(--text-muted)" }}>{(j.search_category || "—").replace(/_/g, " ")}</td>
+                    <td className="px-2 py-2.5 text-xs" style={{ color: "var(--text-muted)" }}>{j.source || "—"}</td>
+                    <td className="px-2 py-2.5 text-xs whitespace-nowrap" style={{ color: "var(--text-muted)" }}>
+                      {j.collected_at ? new Date(j.collected_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+    </div>
   );
 }
 
@@ -393,6 +545,7 @@ export default function AdminClient() {
                         <th className="px-2 py-2 font-semibold text-right">Interviews</th>
                         <th className="px-2 py-2 font-semibold text-right">Offers</th>
                         <th className="px-2 py-2 font-semibold">Last digest</th>
+                        <th className="px-2 py-2 font-semibold" title="Per-user limits: AI resumes/day · jobs/day (blank = default)">Limits</th>
                         <th className="px-2 py-2 font-semibold" />
                       </tr>
                     </thead>
@@ -423,6 +576,9 @@ export default function AdminClient() {
                           <td className="px-2 py-3 text-right tabular-nums" style={{ color: "var(--text)" }}>{u.offered}</td>
                           <td className="px-2 py-3 text-xs" style={{ color: "var(--text-muted)" }}>{u.last_digest_date || "—"}</td>
                           <td className="px-2 py-3">
+                            <OverridesEditor token={token} user={u} onSaved={() => load(token)} />
+                          </td>
+                          <td className="px-2 py-3">
                             <div className="flex flex-col gap-1">
                               <a
                                 href={u.dashboard_token ? `/dashboard?t=${encodeURIComponent(u.dashboard_token)}` : "/dashboard"}
@@ -451,6 +607,11 @@ export default function AdminClient() {
             </SectionCard>
 
             {/* Email history — did each digest actually go out? (T-015) */}
+            {/* Jobs pool search (T-023) — QA the fetchers per category */}
+            <SectionCard icon={Briefcase} title="Jobs pool">
+              <JobsPoolSearch token={token} />
+            </SectionCard>
+
             <SectionCard icon={Mail} title="Recent emails">
               {!overview.email_history || overview.email_history.length === 0 ? (
                 <EmptyState

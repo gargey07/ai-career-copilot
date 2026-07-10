@@ -59,6 +59,9 @@ interface InspectUser {
 }
 interface InspectData {
   user: InspectUser;
+  // Short-lived (5 min) signed URL for the ORIGINAL uploaded resume in the
+  // private bucket — issuance is audited server-side (T-016).
+  resume_signed_url?: string | null;
   matches: Match[];
 }
 
@@ -146,6 +149,20 @@ function InspectContent() {
                 <div><span style={{ color: "var(--text-muted)" }}>Category:</span> {data.user.job_category || "—"}</div>
                 <div><span style={{ color: "var(--text-muted)" }}>Experience:</span> {data.user.experience_level || "—"}</div>
                 <div><span style={{ color: "var(--text-muted)" }}>Template:</span> {data.user.resume_template || "modern"}</div>
+                {data.resume_signed_url && (
+                  <div>
+                    <a
+                      href={data.resume_signed_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium hover:underline"
+                      style={{ color: "var(--primary)" }}
+                      title="Short-lived signed link (5 min) — access is logged"
+                    >
+                      View uploaded resume
+                    </a>
+                  </div>
+                )}
                 <div className="sm:col-span-2">
                   <span style={{ color: "var(--text-muted)" }}>Target roles:</span> {(data.user.target_roles || []).join(", ") || "—"}
                 </div>

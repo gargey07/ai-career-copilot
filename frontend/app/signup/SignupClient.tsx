@@ -9,7 +9,7 @@ import { emptyProfile, type Profile } from "@/lib/profile";
 import { BrandMark } from "@/components/BrandMark";
 import { WarmBackend } from "@/components/WarmBackend";
 import { getStoredProfile, saveStoredProfile, type StoredProfile } from "@/lib/localProfile";
-import { trackEvent } from "@/lib/analytics";
+import { trackEvent, captureRef, getRef } from "@/lib/analytics";
 
 type Step = "upload" | "review";
 
@@ -25,12 +25,16 @@ export default function SignupClient() {
   useEffect(() => {
     const existing = getStoredProfile();
     setReturning(existing);
+    // Capture invite attribution whether they arrived here directly with
+    // ?ref=... or picked it up on the landing page earlier this session.
+    captureRef();
     // Funnel tracking (docs/PRODUCT_STRATEGY_BETA.md success metrics) —
     // only count genuinely new signup attempts, and only once per browser
     // session so a page reload doesn't inflate the "started" count.
     if (!existing && !sessionStorage.getItem("acc:funnel_started_logged")) {
       sessionStorage.setItem("acc:funnel_started_logged", "1");
-      trackEvent("signup_started");
+      const ref = getRef();
+      trackEvent("signup_started", ref ? { meta: { ref } } : undefined);
     }
   }, []);
 

@@ -605,6 +605,54 @@ async function fetchDashboardWithRetry(
   throw lastError;
 }
 
+// ── Invite a friend — measurable sharing, no rewards/claims ─────────────────────
+function InviteCard({ userId }: { userId: string }) {
+  const [copied, setCopied] = useState(false);
+  // Short ref (first UUID segment) — enough to attribute, not enough to
+  // identify; the funnel meta is the only place it lands.
+  const inviteUrl = typeof window !== "undefined"
+    ? `${window.location.origin}/?ref=${userId.split("-")[0]}`
+    : "";
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(inviteUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard unavailable — the visible URL below is selectable
+    }
+  };
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-center gap-2 mb-2">
+        <Sparkles size={18} strokeWidth={1.75} style={{ color: "var(--primary)" }} />
+        <span className="text-sm font-semibold" style={{ color: "var(--text)" }}>Know someone job hunting?</span>
+      </div>
+      <p className="text-xs mb-3" style={{ color: "var(--text-muted)" }}>
+        The beta is free — share your link and they get the same morning matches you do.
+      </p>
+      <div className="flex flex-col sm:flex-row gap-2">
+        <code
+          className="flex-1 px-3 py-2 rounded-md text-xs truncate"
+          style={{ background: "var(--surface-muted)", border: "1px solid var(--border)", color: "var(--text-muted)" }}
+        >
+          {inviteUrl}
+        </code>
+        <button
+          type="button"
+          onClick={copy}
+          className="px-4 py-2 rounded-md text-sm font-semibold text-white transition hover:opacity-90"
+          style={{ background: "var(--primary)" }}
+        >
+          {copied ? "Copied!" : "Copy link"}
+        </button>
+      </div>
+    </Card>
+  );
+}
+
 // ── "Email me my dashboard link" — recovery for lost/legacy links ──────────────
 function RequestLinkForm() {
   const [email, setEmail] = useState("");
@@ -974,6 +1022,10 @@ function DashboardContent() {
             ))}
           </>
         )}
+
+        <div className="mt-12">
+          <InviteCard userId={user.id} />
+        </div>
 
         <div className="mt-12 text-center text-sm" style={{ color: "var(--text-muted)" }}>
           <p>New matches every morning</p>

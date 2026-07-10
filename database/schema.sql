@@ -356,6 +356,26 @@ ALTER TABLE jobs ADD COLUMN IF NOT EXISTS search_category TEXT;
 ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS job_feedback        TEXT;  -- 'not_relevant'
 ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS job_feedback_reason TEXT;  -- wrong_role|too_senior|too_junior|wrong_location|company
 
+-- Per-user quota overrides (T-023) — NULL means "use the global default"
+-- (AI_JOBS_PER_USER / MAX_JOBS_PER_USER). Set via PATCH /api/admin/users/
+-- {id}/overrides; clamped server-side so a typo can't 100x the AI bill.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS resume_quota_override INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS job_count_override    INTEGER;
+
+-- Admin audit trail (T-016) — every sensitive admin action: inspect views,
+-- signed resume-URL issuance, quota changes, deletions, pipeline triggers.
+-- Single shared ADMIN_TOKEN today, so no admin identity column yet; the
+-- trail still answers "what happened to this user's data, and when".
+CREATE TABLE IF NOT EXISTS admin_audit_log (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  action          TEXT NOT NULL,
+  target_user_id  UUID,             -- no FK: the log must outlive deleted users
+  detail          JSONB DEFAULT '{}'::jsonb,
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_log_created ON admin_audit_log(created_at DESC);
+ALTER TABLE admin_audit_log ENABLE ROW LEVEL SECURITY;
+
 CREATE TABLE IF NOT EXISTS funnel_events (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   event       TEXT NOT NULL,

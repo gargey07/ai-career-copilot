@@ -15,6 +15,7 @@ import logging
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from pydantic import BaseModel
 
 from core.config import get_settings
 from core.pipeline_runner import run_fetch_and_match
@@ -32,6 +33,24 @@ def _require_admin(token: str) -> None:
         raise HTTPException(403, "Invalid admin token.")
 
 
+def _audit(action: str, target_user_id: str | None = None, detail: dict | None = None) -> None:
+    """
+    T-016: record every sensitive admin action (who saw what, what changed).
+    There's a single shared ADMIN_TOKEN today, so no admin identity column —
+    the table exists so the trail is being built from day one and gains an
+    admin_id the day real admin accounts exist. Best-effort: an audit
+    failure (e.g. table not migrated yet) must never block the action.
+    """
+    try:
+        get_supabase().table("admin_audit_log").insert({
+            "action": action,
+            "target_user_id": target_user_id,
+            "detail": detail or {},
+        }).execute()
+    except Exception as e:
+        logger.warning(f"   Audit log write failed ({action}): {e}")
+
+
 async def _run_and_log() -> None:
     try:
         stats = await run_fetch_and_match()
@@ -46,11 +65,75 @@ async def _run_and_log() -> None:
 async def run_pipeline_now(background_tasks: BackgroundTasks, token: str = Query(..., description="Admin token")):
     """Trigger a fetch+match run in the background. Returns immediately."""
     _require_admin(token)
+    _audit("pipeline_triggered")
     background_tasks.add_task(_run_and_log)
     return {
         "status": "started",
         "message": "Pipeline is running in the background. Give it a minute, then refresh your dashboard.",
     }
+
+
+# ── Jobs pool search (T-023) — QA tool: "does category X return good jobs?" ────
+@router.get("/jobs")
+async def search_jobs(token: str = Query(..., description="Admin token"), q: str = Query("", max_length=80)):
+    """Search the shared jobs pool by title. Empty q = newest 50."""
+    _require_admin(token)
+    supabase = get_supabase()
+    fields = "id, title, company, location, source, search_category, collected_at, source_url"
+    try:
+        query = supabase.table("jobs").select(fields)
+        if q.strip():
+            query = query.ilike("title", f"%{q.strip()}%")
+        resp = query.order("collected_at", desc=True).limit(50).execute()
+    except Exception:
+        # search_category is a newer column — degrade rather than 500.
+        query = supabase.table("jobs").select("id, title, company, location, source, collected_at, source_url")
+        if q.strip():
+            query = query.ilike("title", f"%{q.strip()}%")
+        resp = query.order("collected_at", desc=True).limit(50).execute()
+    return {"jobs": resp.data or [], "query": q}
+
+
+# ── Per-user quota overrides (T-023) ────────────────────────────────────────────
+class OverridesUpdate(BaseModel):
+    # None = clear the override (fall back to the global setting).
+    resume_quota_override: int | None = None
+    job_count_override: int | None = None
+
+
+@router.patch("/users/{user_id}/overrides")
+async def update_overrides(user_id: str, payload: OverridesUpdate, token: str = Query(..., description="Admin token")):
+    """
+    Set/clear per-user limits above or below the defaults (AI_JOBS_PER_USER /
+    MAX_JOBS_PER_USER). Values are clamped to sane bounds — an override is a
+    dial for beta support, not a way to accidentally 100x the AI bill.
+    """
+    _require_admin(token)
+
+    def clamp(v: int | None, hi: int) -> int | None:
+        if v is None:
+            return None
+        return max(0, min(int(v), hi))
+
+    update = {
+        "resume_quota_override": clamp(payload.resume_quota_override, 20),
+        "job_count_override": clamp(payload.job_count_override, 50),
+    }
+    supabase = get_supabase()
+    old = {}
+    try:
+        old_resp = supabase.table("users").select("resume_quota_override, job_count_override").eq("id", user_id).single().execute()
+        old = old_resp.data or {}
+    except Exception:
+        pass
+    try:
+        supabase.table("users").update(update).eq("id", user_id).execute()
+    except Exception as e:
+        logger.error(f"   Override update failed for {user_id}: {e}")
+        raise HTTPException(500, "Couldn't save overrides — the override columns may not be migrated yet.")
+
+    _audit("overrides_changed", user_id, {"old": old, "new": update})
+    return {"status": "ok", **update}
 
 
 # ── Overview ──────────────────────────────────────────────────────────────────
@@ -88,13 +171,23 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
     supabase = get_supabase()
     today = date.today().isoformat()
 
-    # Users — newest first so recent signups are on top.
-    users_resp = (
-        supabase.table("users")
-        .select("id, name, email, created_at, job_category, experience_level, is_active, resume_file_path")
-        .order("created_at", desc=True)
-        .execute()
-    )
+    # Users — newest first so recent signups are on top. Override columns
+    # are newer — fall back to the base select pre-migration.
+    base_user_fields = "id, name, email, created_at, job_category, experience_level, is_active, resume_file_path"
+    try:
+        users_resp = (
+            supabase.table("users")
+            .select(f"{base_user_fields}, resume_quota_override, job_count_override")
+            .order("created_at", desc=True)
+            .execute()
+        )
+    except Exception:
+        users_resp = (
+            supabase.table("users")
+            .select(base_user_fields)
+            .order("created_at", desc=True)
+            .execute()
+        )
     users = users_resp.data or []
 
     # All match rows — aggregated per user in Python (beta-scale data; a few
@@ -143,6 +236,8 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
             "is_active": bool(u.get("is_active")),
             "has_resume": bool(u.get("resume_file_path")),
             "dashboard_token": generate_dashboard_token(u["id"]),
+            "resume_quota_override": u.get("resume_quota_override"),
+            "job_count_override": u.get("job_count_override"),
             **per_user.get(u["id"], empty_stats),
         }
         for u in users
@@ -235,13 +330,15 @@ async def inspect_user(user_id: str, token: str = Query(..., description="Admin 
     nobody had looked at whether the matches or the AI resumes are good.
     """
     _require_admin(token)
+    _audit("inspect_user", user_id)
     supabase = get_supabase()
 
     user_resp = (
         supabase.table("users")
         .select(
             "id, name, email, job_category, experience_level, target_roles, "
-            "skills, tools, summary, resume_text, resume_template, created_at"
+            "skills, tools, summary, resume_text, resume_template, created_at, "
+            "resume_file_path"
         )
         .eq("id", user_id)
         .execute()
@@ -249,6 +346,20 @@ async def inspect_user(user_id: str, token: str = Query(..., description="Admin 
     if not user_resp.data:
         raise HTTPException(404, "User not found.")
     user = user_resp.data[0]
+
+    # T-016: short-lived signed URL for the ORIGINAL uploaded resume in the
+    # private bucket — 5-minute expiry, never a permanent public link, and
+    # every issuance is audited.
+    resume_signed_url = None
+    resume_file_path = user.pop("resume_file_path", None)
+    if resume_file_path:
+        try:
+            signed = supabase.storage.from_("resume-uploads").create_signed_url(resume_file_path, 300)
+            resume_signed_url = (signed or {}).get("signedURL") or (signed or {}).get("signedUrl")
+            if resume_signed_url:
+                _audit("resume_url_issued", user_id, {"path": resume_file_path})
+        except Exception as e:
+            logger.warning(f"   Couldn't sign resume URL for {user_id}: {e}")
 
     match_fields = (
         "id, match_score, status, digest_date, pdf_url, optimized_resume_text, "
@@ -279,6 +390,7 @@ async def inspect_user(user_id: str, token: str = Query(..., description="Admin 
 
     return {
         "user": user,
+        "resume_signed_url": resume_signed_url,
         "matches": [
             {
                 "id": m["id"],
@@ -344,6 +456,7 @@ async def delete_user(user_id: str, token: str = Query(..., description="Admin t
         logger.warning(f"   Couldn't remove generated PDFs for {user_id}: {e}")
 
     supabase.table("users").delete().eq("id", user_id).execute()
+    _audit("user_deleted", user_id, {"email": user.get("email")})
     logger.info(f"   🗑️  Deleted user {user_id} ({user.get('email')}) via admin panel")
 
     return {"status": "deleted", "email": user.get("email")}

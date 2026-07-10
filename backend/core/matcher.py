@@ -229,7 +229,6 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
     Returns:
         List of matched jobs with their match_score
     """
-    limit = limit or settings.max_jobs_per_user
     supabase = get_supabase()
 
     # 1. Get user profile
@@ -239,6 +238,11 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
         return []
 
     user = user_resp.data
+    # Caller's explicit limit wins; otherwise the per-user admin override
+    # (T-023, select("*") already includes it when the column exists);
+    # otherwise the global MAX_JOBS_PER_USER default.
+    if limit is None:
+        limit = user.get("job_count_override") or settings.max_jobs_per_user
     logger.info(f"🎯 Matching jobs for user: {user.get('name', user_id)}")
 
     seen = await _get_seen_job_ids(supabase, user_id)

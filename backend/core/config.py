@@ -30,9 +30,10 @@ class Settings(BaseSettings):
     # redirect link that ship inside emails (those must point at the backend
     # directly, not the frontend). Falls back to the current Coolify/Hostinger
     # URL if BACKEND_URL is unset on the server, same pattern as frontend_url —
-    # migrated off Render 2026-07-10; set BACKEND_URL explicitly once a real
-    # domain is pointed at the VPS instead of relying on this fallback.
-    backend_url: str = "http://n99tn44btm3ff0rx5pppaoqp.200.97.165.139.sslip.io"
+    # migrated off Render 2026-07-10, HTTPS enabled 2026-07-10; set BACKEND_URL
+    # explicitly once a real domain is pointed at the VPS instead of relying
+    # on this fallback.
+    backend_url: str = "https://n99tn44btm3ff0rx5pppaoqp.200.97.165.139.sslip.io"
     founder_email: str = "gargeypatel123@gmail.com"
     digest_time: str = "07:00"
     max_jobs_per_user: int = 10

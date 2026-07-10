@@ -21,4 +21,4 @@ jobs:
           # --max-time 90 tolerates a cold start; never fail the workflow —
           # a missed ping just means the next one wakes the service.
           curl --silent --show-error --max-time 90 \
-            http://n99tn44btm3ff0rx5pppaoqp.200.97.165.139.sslip.io/health || true
+            https://n99tn44btm3ff0rx5pppaoqp.200.97.165.139.sslip.io/health || true

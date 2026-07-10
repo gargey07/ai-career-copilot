@@ -136,11 +136,12 @@ async def get_dashboard(user_id: str, t: str = Query("", description="Signed das
     # is fetched only to derive has_optimized_resume below — the raw text
     # itself is never shipped to the dashboard (see the transform below).
     jobs_fields = (
-        "id, match_score, pdf_url, digest_date, status, applied_at, optimized_resume_text, "
-        "jobs(id, title, company, location, is_remote, source_url)"
+        "id, match_score, pdf_url, digest_date, status, applied_at, optimized_resume_text, cover_letter_text, "
+        "jobs(id, title, company, location, is_remote, source_url, salary_min, salary_max, currency)"
     )
     jobs_resp = None
-    for extra in (", feedback, feedback_reason, job_feedback, job_feedback_reason",
+    for extra in (", feedback, feedback_reason, job_feedback, job_feedback_reason, application_status, match_breakdown",
+                  ", feedback, feedback_reason, job_feedback, job_feedback_reason",
                   ", feedback, feedback_reason",
                   ""):
         try:
@@ -168,6 +169,8 @@ async def get_dashboard(user_id: str, t: str = Query("", description="Signed das
     for row in (jobs_resp.data or []):
         row = dict(row)
         row["has_optimized_resume"] = bool(row.pop("optimized_resume_text", None))
+        # Same boolean-not-content rule as the resume text above.
+        row["has_cover_letter"] = bool(row.pop("cover_letter_text", None))
         jobs.append(row)
 
     # Only ship the fields the dashboard needs — the rest stays server-side.
@@ -330,6 +333,178 @@ async def mark_applied(user_id: str, match_id: str, payload: AppliedRequest, t: 
         raise HTTPException(500, "Couldn't save that — try again in a moment.")
 
     return {"status": "ok", "applied": payload.applied}
+
+
+# Application tracker — strictly user-asserted transitions. "" clears the
+# status (back to just "applied_at" from the Applied button).
+ALLOWED_APPLICATION_STATUSES = {"", "applied", "interviewing", "offer", "rejected"}
+
+
+class ApplicationStatusRequest(BaseModel):
+    status: str
+
+
+class CoverLetterRequest(BaseModel):
+    regenerate: bool = False
+
+
+async def _generate_resume_task(user_id: str, match_id: str) -> None:
+    """Background: tailored resume text, then its PDF. Each half best-effort."""
+    try:
+        from core.optimizer import run_optimizer_for_match
+        ok = await run_optimizer_for_match(user_id, match_id)
+        if not ok:
+            logger.warning(f"   On-demand resume generation produced nothing for match {match_id}")
+            return
+    except Exception as e:
+        logger.error(f"   On-demand resume generation failed for match {match_id}: {e}")
+        return
+    try:
+        from core.pdf_generator import generate_pdf_for_match
+        await generate_pdf_for_match(match_id)
+    except Exception as e:
+        logger.warning(f"   On-demand PDF render failed for match {match_id} (resume text saved): {e}")
+
+
+@router.post("/{user_id}/matches/{match_id}/generate-resume")
+async def generate_resume_on_demand(user_id: str, match_id: str, background_tasks: BackgroundTasks, t: str = Query("")):
+    """
+    Per-job "Generate Tailored Resume" — the pipeline only auto-generates
+    for the top few matches; this lets the user pick which OTHER match
+    deserves one. Capped per day at the user's pipeline quota plus a small
+    on-demand bonus, counted from rows that actually have resume text today.
+    """
+    _require_dashboard_token(user_id, t)
+    supabase = get_supabase()
+
+    owns = (
+        supabase.table("user_jobs")
+        .select("id, optimized_resume_text, pdf_url")
+        .eq("id", match_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not owns.data:
+        raise HTTPException(404, "Match not found.")
+    row = owns.data[0]
+    if row.get("optimized_resume_text"):
+        return {"status": "already_generated", "message": "This match already has a tailored resume."}
+
+    # Daily cap: pipeline quota (or admin override) + on-demand bonus.
+    try:
+        user_resp = supabase.table("users").select("resume_quota_override").eq("id", user_id).single().execute()
+        override = (user_resp.data or {}).get("resume_quota_override")
+    except Exception:
+        override = None
+    quota = (override if override is not None else settings.ai_jobs_per_user) + settings.on_demand_resume_bonus_per_day
+
+    from datetime import date as _date
+    today = _date.today().isoformat()
+    generated_today = (
+        supabase.table("user_jobs")
+        .select("id, optimized_resume_text")
+        .eq("user_id", user_id)
+        .eq("digest_date", today)
+        .not_.is_("optimized_resume_text", "null")
+        .execute()
+    )
+    if len(generated_today.data or []) >= quota:
+        raise HTTPException(
+            429,
+            "You've used today's tailored-resume allowance — more unlock tomorrow morning.",
+        )
+
+    background_tasks.add_task(_generate_resume_task, user_id, match_id)
+    return {"status": "started", "message": "Generating your tailored resume — this can take up to a minute."}
+
+
+@router.post("/{user_id}/matches/{match_id}/generate-cover-letter")
+async def generate_cover_letter_on_demand(user_id: str, match_id: str, payload: CoverLetterRequest, t: str = Query("")):
+    """
+    On-demand cover letter for a specific job — never automatic (a full
+    extra AI call per match; docs/PRODUCT_STRATEGY_BETA.md keeps costs
+    honest). Returns the existing letter unless regenerate=true; capped
+    per user per day.
+    """
+    _require_dashboard_token(user_id, t)
+    supabase = get_supabase()
+
+    owns = (
+        supabase.table("user_jobs")
+        .select("id, job_id, cover_letter_text")
+        .eq("id", match_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not owns.data:
+        raise HTTPException(404, "Match not found.")
+    row = owns.data[0]
+
+    if row.get("cover_letter_text") and not payload.regenerate:
+        return {"status": "ok", "cover_letter": row["cover_letter_text"], "cached": True}
+
+    if not check_budget(f"cover_letter_{user_id}", settings.cover_letters_per_user_daily):
+        raise HTTPException(429, "You've used today's cover-letter allowance — more unlock tomorrow.")
+
+    user_resp = supabase.table("users").select("name, resume_text").eq("id", user_id).single().execute()
+    user = user_resp.data or {}
+    if not user.get("resume_text"):
+        raise HTTPException(400, "Add your resume first — the cover letter is written from it.")
+
+    job_resp = supabase.table("jobs").select("title, company, description").eq("id", row["job_id"]).single().execute()
+    job = job_resp.data
+    if not job:
+        raise HTTPException(404, "The job posting for this match is no longer available.")
+
+    from core.optimizer import generate_cover_letter
+    try:
+        letter = await generate_cover_letter(
+            name=user.get("name", "Applicant"),
+            resume_text=user["resume_text"],
+            job_title=job["title"],
+            company=job["company"],
+            job_description=job.get("description", ""),
+        )
+    except Exception as e:
+        logger.error(f"   Cover-letter generation failed for match {match_id}: {e}")
+        raise HTTPException(503, "Couldn't generate the letter right now — try again in a minute.")
+
+    try:
+        supabase.table("user_jobs").update({"cover_letter_text": letter}).eq("id", match_id).execute()
+    except Exception as e:
+        logger.warning(f"   Couldn't store cover letter for match {match_id}: {e}")
+
+    return {"status": "ok", "cover_letter": letter, "cached": False}
+
+
+@router.patch("/{user_id}/matches/{match_id}/application-status")
+async def update_application_status(user_id: str, match_id: str, payload: ApplicationStatusRequest, t: str = Query("")):
+    """
+    User-asserted application progress (applied → interviewing → offer /
+    rejected). Same honesty rule as the Applied button: we only ever show
+    what the user themselves told us, never inferred pipeline stages.
+    """
+    _require_dashboard_token(user_id, t)
+    status = (payload.status or "").strip()
+    if status not in ALLOWED_APPLICATION_STATUSES:
+        raise HTTPException(400, "Unrecognized status.")
+
+    supabase = get_supabase()
+    owns = supabase.table("user_jobs").select("id").eq("id", match_id).eq("user_id", user_id).execute()
+    if not owns.data:
+        raise HTTPException(404, "Match not found.")
+
+    update = {
+        "application_status": status or None,
+        "application_status_updated_at": datetime.now(timezone.utc).isoformat() if status else None,
+    }
+    try:
+        supabase.table("user_jobs").update(update).eq("id", match_id).execute()
+    except Exception as e:
+        logger.warning(f"   Application-status write failed for match {match_id} ({e}) — columns may be unmigrated.")
+        raise HTTPException(500, "Couldn't save that — try again in a moment.")
+
+    return {"status": "ok", "application_status": status or None}
 
 
 @router.post("/{user_id}/matches/{match_id}/retry-pdf")

@@ -15,6 +15,7 @@ import {
   ThumbsUp,
   ThumbsDown,
   RefreshCw,
+  Mail,
   type LucideIcon,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
@@ -49,6 +50,9 @@ interface UserJob {
   // "not selected for AI tailoring" (normal — only top matches get one)
   // from "generation failed" (TICKET-020). See backend/api/routes/users.py.
   has_optimized_resume?: boolean;
+  has_cover_letter?: boolean;
+  // User-asserted application progress (applied/interviewing/offer/rejected).
+  application_status?: string | null;
 }
 
 // The signed dashboard token IS the user's key — backend endpoints reject
@@ -320,6 +324,223 @@ function AppliedButton({ userId, token, match }: { userId: string; token: string
   );
 }
 
+// ── On-demand "Generate Tailored Resume" — for matches the pipeline's
+// top-N auto-generation didn't cover. Quota-gated server-side.
+function GenerateResumeButton({ userId, token, matchId }: { userId: string; token: string; matchId: string }) {
+  const [state, setState] = useState<"idle" | "requesting" | "started" | "capped">("idle");
+
+  const generate = async () => {
+    setState("requesting");
+    try {
+      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${matchId}/generate-resume?t=${encodeURIComponent(token)}`, { method: "POST" });
+      if (res.status === 429) setState("capped");
+      else setState(res.ok ? "started" : "idle");
+    } catch {
+      setState("idle");
+    }
+  };
+
+  if (state === "capped") {
+    return (
+      <span className="inline-flex items-center px-4 py-2.5 rounded-md text-sm" style={{ background: "var(--surface-muted)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
+        Daily resume allowance used — more tomorrow
+      </span>
+    );
+  }
+  if (state === "started") {
+    return (
+      <span className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm" style={{ background: "var(--surface-muted)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
+        <Clock size={16} strokeWidth={1.75} />
+        Generating — refresh in about a minute
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={generate}
+      disabled={state === "requesting"}
+      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-semibold transition hover:bg-[var(--surface-muted)] disabled:opacity-60"
+      style={{ border: "1px solid var(--primary)", color: "var(--primary)" }}
+    >
+      <FileText size={16} strokeWidth={1.75} />
+      {state === "requesting" ? "Starting…" : "Generate Tailored Resume"}
+    </button>
+  );
+}
+
+// ── On-demand cover letter — never automatic, shown in a copyable modal ────────
+function CoverLetterButton({ userId, token, match }: { userId: string; token: string; match: UserJob }) {
+  const [open, setOpen] = useState(false);
+  const [letter, setLetter] = useState<string | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "capped" | "error">("idle");
+  const [copied, setCopied] = useState(false);
+
+  const fetchLetter = async (regenerate: boolean) => {
+    setState("loading");
+    try {
+      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${match.id}/generate-cover-letter?t=${encodeURIComponent(token)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ regenerate }),
+      });
+      if (res.status === 429) {
+        setState("capped");
+        return;
+      }
+      if (!res.ok) {
+        setState("error");
+        return;
+      }
+      const data = await res.json();
+      setLetter(data.cover_letter);
+      setState("idle");
+    } catch {
+      setState("error");
+    }
+  };
+
+  const openModal = () => {
+    setOpen(true);
+    if (!letter) fetchLetter(false);
+  };
+
+  const copy = async () => {
+    if (!letter) return;
+    try {
+      await navigator.clipboard.writeText(letter);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* clipboard unavailable — user can select manually */ }
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={openModal}
+        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-semibold transition hover:bg-[var(--surface-muted)]"
+        style={{ border: "1px solid var(--border)", color: "var(--text)" }}
+      >
+        <Mail size={16} strokeWidth={1.75} />
+        {match.has_cover_letter ? "View Cover Letter" : "Cover Letter"}
+      </button>
+      {open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "rgba(15,47,58,0.45)" }}
+          onClick={() => setOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Cover letter"
+        >
+          <div
+            className="w-full max-w-xl rounded-lg p-6 max-h-[85vh] flex flex-col"
+            style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-bold" style={{ color: "var(--text)" }}>
+                Cover letter — {match.jobs.title} at {match.jobs.company}
+              </h3>
+              <button type="button" onClick={() => setOpen(false)} className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
+                Close
+              </button>
+            </div>
+            {state === "loading" ? (
+              <p className="text-sm py-8 text-center" style={{ color: "var(--text-muted)" }}>Writing your cover letter — usually 5–15 seconds…</p>
+            ) : state === "capped" ? (
+              <p className="text-sm py-8 text-center" style={{ color: "var(--text-muted)" }}>You&apos;ve used today&apos;s cover-letter allowance — more unlock tomorrow.</p>
+            ) : state === "error" ? (
+              <p className="text-sm py-8 text-center" style={{ color: "var(--coral)" }}>Couldn&apos;t generate the letter right now — close this and try again in a minute.</p>
+            ) : letter ? (
+              <>
+                <textarea
+                  readOnly
+                  value={letter}
+                  className="w-full flex-1 min-h-[260px] rounded-md p-3 text-sm leading-relaxed outline-none resize-y"
+                  style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)" }}
+                />
+                <div className="flex items-center justify-between mt-3">
+                  <button
+                    type="button"
+                    onClick={() => fetchLetter(true)}
+                    className="text-xs hover:underline"
+                    style={{ color: "var(--text-muted)" }}
+                    title="Uses one of today's cover-letter generations"
+                  >
+                    Regenerate
+                  </button>
+                  <button
+                    type="button"
+                    onClick={copy}
+                    className="px-4 py-2 rounded-md text-sm font-semibold text-white transition hover:opacity-90"
+                    style={{ background: "var(--primary)" }}
+                  >
+                    {copied ? "Copied" : "Copy to clipboard"}
+                  </button>
+                </div>
+                <p className="text-xs mt-2" style={{ color: "var(--text-muted)" }}>
+                  AI-drafted from your real resume — read it over and make it yours before sending.
+                </p>
+              </>
+            ) : null}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ── Application progress — user-asserted, appears once "I applied" is on ───────
+const APPLICATION_STATUSES: { value: string; label: string }[] = [
+  { value: "applied", label: "Applied" },
+  { value: "interviewing", label: "Interviewing" },
+  { value: "offer", label: "Got an offer" },
+  { value: "rejected", label: "Rejected" },
+];
+
+function ApplicationStatusSelect({ userId, token, match }: { userId: string; token: string; match: UserJob }) {
+  const [status, setStatus] = useState(match.application_status || "applied");
+  const [saving, setSaving] = useState(false);
+
+  const save = async (next: string) => {
+    const prev = status;
+    setStatus(next);
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${match.id}/application-status?t=${encodeURIComponent(token)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: next }),
+      });
+      if (!res.ok) setStatus(prev);
+    } catch {
+      setStatus(prev);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <label className="inline-flex items-center gap-2 text-xs" style={{ color: "var(--text-muted)" }}>
+      Status
+      <select
+        value={status}
+        disabled={saving}
+        onChange={(e) => save(e.target.value)}
+        className="px-2 py-1.5 rounded-md text-xs outline-none disabled:opacity-60"
+        style={{ border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)" }}
+        aria-label="Application status"
+      >
+        {APPLICATION_STATUSES.map((s) => (
+          <option key={s.value} value={s.value}>{s.label}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 // ── "Not relevant" — job-fit feedback that feeds matching penalties ────────────
 function NotRelevant({ userId, token, match }: { userId: string; token: string; match: UserJob }) {
   const [state, setState] = useState<"idle" | "picking" | "done">(
@@ -444,7 +665,11 @@ function JobCard({ match, index, userId, token }: { match: UserJob; index: numbe
             <Clock size={16} strokeWidth={1.75} />
             Resume generating…
           </span>
-        ) : null}
+        ) : (
+          <GenerateResumeButton userId={userId} token={token} matchId={match.id} />
+        )}
+
+        <CoverLetterButton userId={userId} token={token} match={match} />
 
         {hasApply ? (
           <a
@@ -464,6 +689,9 @@ function JobCard({ match, index, userId, token }: { match: UserJob; index: numbe
         )}
 
         <AppliedButton userId={userId} token={token} match={match} />
+        {(match.status === "applied" || match.applied_at) && (
+          <ApplicationStatusSelect userId={userId} token={token} match={match} />
+        )}
       </div>
 
       <div className="pt-3 flex flex-wrap items-center justify-between gap-3" style={{ borderTop: "1px solid var(--border)" }}>
@@ -838,6 +1066,11 @@ function DashboardContent() {
     .filter((m) => m.pdf_url)
     .sort((a, b) => (b.match_score || 0) - (a.match_score || 0));
   const resumesReady = readyMatches.length;
+  // Applications the user themselves marked (strategy rule: only ever
+  // user-asserted progress) — most recently updated first.
+  const applications = allJobs
+    .filter((m) => m.applied_at || m.status === "applied" || m.application_status)
+    .sort((a, b) => (b.applied_at || "").localeCompare(a.applied_at || ""));
   const bestMatch = todayMatches.length ? Math.max(...todayMatches.map((m) => normalizeScorePct(m.match_score))) : 0;
 
   // Multiple pipeline runs in one day can pile up dozens of "today"
@@ -1007,6 +1240,34 @@ function DashboardContent() {
                   description="Your first matches are usually ready within a few minutes of signing up — try refreshing. After that, new matches arrive every morning."
                 />
               </Card>
+            )}
+
+            {/* Your applications — user-asserted progress tracker */}
+            {applications.length > 0 && (
+              <div className="mt-10">
+                <h2 className="text-lg font-semibold mb-1" style={{ color: "var(--text)" }}>Your applications</h2>
+                <p className="text-sm mb-4" style={{ color: "var(--text-muted)" }}>
+                  Jobs you marked as applied — update the status as things move.
+                </p>
+                <Card className="p-0 overflow-hidden">
+                  {applications.map((m, i) => (
+                    <div
+                      key={m.id}
+                      className="flex flex-wrap items-center justify-between gap-3 px-5 py-4"
+                      style={i > 0 ? { borderTop: "1px solid var(--border)" } : undefined}
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold truncate" style={{ color: "var(--text)" }}>{m.jobs.title}</p>
+                        <p className="text-xs truncate" style={{ color: "var(--text-muted)" }}>
+                          {m.jobs.company}
+                          {m.applied_at && ` · marked applied ${new Date(m.applied_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`}
+                        </p>
+                      </div>
+                      <ApplicationStatusSelect userId={user.id} token={token} match={m} />
+                    </div>
+                  ))}
+                </Card>
+              </div>
             )}
 
             {/* Previous days, one section per date, most recent first */}

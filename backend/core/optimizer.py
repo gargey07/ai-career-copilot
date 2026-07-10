@@ -220,6 +220,67 @@ def _apply_cached_resume(supabase, match_id: str, cached: dict) -> None:
         supabase.table("user_jobs").update(payload).eq("id", match_id).execute()
 
 
+async def run_optimizer_for_match(user_id: str, match_id: str) -> bool:
+    """
+    On-demand tailored resume for ONE match (the dashboard's per-job
+    "Generate Tailored Resume" button) — the pipeline only auto-generates
+    for the top AI_JOBS_PER_USER matches, and this is how a user gets a
+    resume for a lower-ranked job they actually want to apply to. Same
+    cache and write path as the batch optimizer. Returns True when the
+    match ends up with resume text (fresh or cached).
+    """
+    supabase = get_supabase()
+    today = date.today().isoformat()
+
+    match_resp = (
+        supabase.table("user_jobs")
+        .select("id, job_id, optimized_resume_text")
+        .eq("id", match_id)
+        .eq("user_id", user_id)
+        .single()
+        .execute()
+    )
+    match = match_resp.data
+    if not match:
+        return False
+    if match.get("optimized_resume_text"):
+        return True  # already generated — nothing to do
+
+    cached = _find_recent_resume(supabase, user_id, match["job_id"], today)
+    if cached:
+        try:
+            _apply_cached_resume(supabase, match_id, cached)
+            logger.info(f"   ♻️  On-demand resume served from cache for match {match_id}")
+            return True
+        except Exception as e:
+            logger.warning(f"   Cache apply failed ({e}) — generating fresh.")
+
+    user_resp = supabase.table("users").select("name, resume_text, skills, tools, job_category").eq("id", user_id).single().execute()
+    user = user_resp.data or {}
+    if not user.get("resume_text"):
+        return False
+
+    job_resp = supabase.table("jobs").select("title, company, description").eq("id", match["job_id"]).single().execute()
+    job = job_resp.data
+    if not job:
+        return False
+
+    optimized = await optimize_resume(
+        resume_text=user["resume_text"],
+        job_title=job["title"],
+        company=job["company"],
+        job_description=job.get("description", ""),
+        user_tools=user.get("tools") or [],
+        user_skills=user.get("skills") or [],
+        job_category=user.get("job_category") or "ui_ux_designer",
+    )
+    supabase.table("user_jobs").update({
+        "optimized_resume_text": optimized,
+        "status": "resume_ready",
+    }).eq("id", match_id).execute()
+    return True
+
+
 # ── Pipeline Function ─────────────────────────────────────────────────────────
 async def run_optimizer_for_user(user_id: str) -> int:
     """

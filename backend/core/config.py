@@ -137,6 +137,11 @@ class Settings(BaseSettings):
     # cap, repeated unauthenticated confirms could drain the whole day's
     # budget. Generous enough for a signup plus several profile edits.
     profile_confirm_daily_limit_per_ip: int = 10
+    # On-demand generation (per-job dashboard buttons) — separate small caps
+    # on top of the pipeline's AI_JOBS_PER_USER so one user can't drain the
+    # provider budget by hammering Generate.
+    on_demand_resume_bonus_per_day: int = 2      # extra resumes beyond the pipeline quota
+    cover_letters_per_user_daily: int = 3
 
     # Shared secret to authorize the manual pipeline trigger (POST /api/admin/run-pipeline).
     # Empty = trigger disabled (safe default). Set ADMIN_TOKEN on the server to enable.

@@ -59,6 +59,75 @@ def normalize_job(
     }
 
 
+# ── Location resolution ───────────────────────────────────────────────────────
+# Users type free-text locations ("Dubai", "London, UK", "United States") in
+# preferred_locations. These maps turn that into something the APIs accept.
+# Adzuna is per-country-ENDPOINT — only these country codes exist there:
+ADZUNA_COUNTRIES = {
+    "at", "au", "be", "br", "ca", "ch", "de", "es", "fr", "gb", "in", "it",
+    "mx", "nl", "nz", "pl", "sg", "us", "za",
+}
+
+_COUNTRY_CODES = {
+    "india": "in",
+    "united kingdom": "gb", "uk": "gb", "england": "gb", "great britain": "gb", "scotland": "gb",
+    "united states": "us", "usa": "us", "us": "us", "america": "us", "united states of america": "us",
+    "canada": "ca", "australia": "au", "germany": "de", "france": "fr",
+    "netherlands": "nl", "singapore": "sg", "new zealand": "nz",
+    "austria": "at", "belgium": "be", "brazil": "br", "switzerland": "ch",
+    "spain": "es", "italy": "it", "mexico": "mx", "poland": "pl", "south africa": "za",
+    # Not on Adzuna, but still resolvable so JSearch can serve them:
+    "uae": "ae", "united arab emirates": "ae", "ireland": "ie", "japan": "jp",
+    "qatar": "qa", "saudi arabia": "sa",
+}
+
+_CITY_COUNTRY = {
+    # India
+    "mumbai": "in", "delhi": "in", "new delhi": "in", "bangalore": "in", "bengaluru": "in",
+    "hyderabad": "in", "chennai": "in", "pune": "in", "kolkata": "in", "ahmedabad": "in",
+    "gurgaon": "in", "gurugram": "in", "noida": "in", "jaipur": "in", "surat": "in",
+    # Gulf
+    "dubai": "ae", "abu dhabi": "ae", "sharjah": "ae", "doha": "qa", "riyadh": "sa", "jeddah": "sa",
+    # UK / Europe
+    "london": "gb", "manchester": "gb", "birmingham": "gb", "edinburgh": "gb",
+    "berlin": "de", "munich": "de", "frankfurt": "de", "paris": "fr", "amsterdam": "nl",
+    "dublin": "ie", "zurich": "ch", "madrid": "es", "barcelona": "es", "milan": "it", "warsaw": "pl",
+    # North America
+    "new york": "us", "san francisco": "us", "seattle": "us", "austin": "us", "boston": "us",
+    "chicago": "us", "los angeles": "us", "toronto": "ca", "vancouver": "ca",
+    # APAC / other
+    "singapore": "sg", "sydney": "au", "melbourne": "au", "auckland": "nz", "tokyo": "jp",
+    "sao paulo": "br", "mexico city": "mx", "johannesburg": "za", "cape town": "za",
+}
+
+_COUNTRY_NAMES = {code: name.title() for name, code in _COUNTRY_CODES.items()}
+_REMOTE_WORDS = {"remote", "anywhere", "work from home", "wfh"}
+
+
+def resolve_fetch_location(raw: str) -> Optional[dict]:
+    """
+    Free-text preferred_location -> {"raw", "country_code", "city"} fetch
+    target, or None for remote/empty entries (remote sources always run
+    regardless of location). Unknown places still resolve — with
+    country_code=None — so JSearch can use the raw text even when Adzuna
+    (country-endpoint-based) has to sit that fetch out.
+    """
+    text = (raw or "").strip()
+    key = re.sub(r"\s+", " ", text.lower()).strip(" .")
+    if not key or key in _REMOTE_WORDS:
+        return None
+    if key in _COUNTRY_CODES:
+        return {"raw": text, "country_code": _COUNTRY_CODES[key], "city": None}
+    if key in _CITY_COUNTRY:
+        return {"raw": text, "country_code": _CITY_COUNTRY[key], "city": text}
+    if "," in key:  # "City, Country"
+        city_part, _, country_part = key.partition(",")
+        city_part, country_part = city_part.strip(), country_part.strip()
+        code = _COUNTRY_CODES.get(country_part) or _CITY_COUNTRY.get(city_part)
+        return {"raw": text, "country_code": code, "city": city_part.title()}
+    return {"raw": text, "country_code": None, "city": text}
+
+
 # ── Query matching (profession-agnostic) ──────────────────────────────────────
 _STOPWORDS = {"the", "and", "for", "with", "job", "jobs", "role", "roles", "senior", "junior"}
 
@@ -90,10 +159,15 @@ class AdzunaFetcher:
         self.app_key = settings.adzuna_app_key
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    async def fetch(self, query: str = "designer", country: str = "in", pages: int = 3) -> list[dict]:
-        """Fetch jobs from Adzuna API."""
+    async def fetch(self, query: str = "designer", country: str = "in", pages: int = 3, where: Optional[str] = None) -> list[dict]:
+        """Fetch jobs from Adzuna API. `country` must be one of Adzuna's
+        country endpoints (ADZUNA_COUNTRIES); `where` narrows to a city/
+        region within it."""
         if not self.app_id or not self.app_key:
             logger.warning("⚠️  Adzuna API keys not set — skipping")
+            return []
+        if country not in ADZUNA_COUNTRIES:
+            logger.info(f"   Adzuna has no '{country}' endpoint — skipping Adzuna for this fetch")
             return []
         if not check_budget("adzuna", settings.adzuna_daily_limit, amount=pages):
             return []
@@ -102,15 +176,18 @@ class AdzunaFetcher:
         async with httpx.AsyncClient(timeout=30) as client:
             for page in range(1, pages + 1):
                 try:
+                    params = {
+                        "app_id": self.app_id,
+                        "app_key": self.app_key,
+                        "what": query,
+                        "results_per_page": 50,
+                        "content-type": "application/json",
+                    }
+                    if where:
+                        params["where"] = where
                     resp = await client.get(
                         f"{self.BASE_URL}/{country}/search/{page}",
-                        params={
-                            "app_id": self.app_id,
-                            "app_key": self.app_key,
-                            "what": query,
-                            "results_per_page": 50,
-                            "content-type": "application/json",
-                        },
+                        params=params,
                     )
                     resp.raise_for_status()
                     data = resp.json()
@@ -145,14 +222,18 @@ class JSearchFetcher:
     def __init__(self):
         self.api_key = settings.jsearch_api_key
 
-    async def fetch(self, query: str = "UI UX Designer", num_pages: int = 1) -> list[dict]:
-        """Fetch jobs from JSearch (LinkedIn) via RapidAPI."""
+    async def fetch(self, query: str = "UI UX Designer", num_pages: int = 1, location_text: Optional[str] = None) -> list[dict]:
+        """Fetch jobs from JSearch (LinkedIn) via RapidAPI. `location_text`
+        is free text ("Dubai", "London") appended as "in {location}";
+        without one, the historical India default is kept so existing
+        (mostly-India) users' results don't shift underneath them."""
         if not self.api_key:
             logger.warning("⚠️  JSearch API key not set — skipping")
             return []
         if not check_budget("jsearch", settings.jsearch_daily_limit, amount=num_pages):
             return []
 
+        search_query = f"{query} in {location_text}" if location_text else f"{query} India"
         jobs = []
         async with httpx.AsyncClient(timeout=30) as client:
             for page in range(1, num_pages + 1):
@@ -164,7 +245,7 @@ class JSearchFetcher:
                             "X-RapidAPI-Host": self.HOST,
                         },
                         params={
-                            "query": f"{query} India",
+                            "query": search_query,
                             "page": str(page),
                             "num_pages": "1",
                             "date_posted": "week",
@@ -392,7 +473,7 @@ async def store_jobs(jobs: list[dict]) -> int:
 
 
 # ── Main Runner ───────────────────────────────────────────────────────────────
-async def run_all_fetchers(query: str = "", category: str = "") -> int:
+async def run_all_fetchers(query: str = "", category: str = "", location: Optional[dict] = None) -> int:
     """
     Run all fetchers and store results. Returns total new jobs stored.
 
@@ -404,8 +485,14 @@ async def run_all_fetchers(query: str = "", category: str = "") -> int:
     on a source_url that already exists keep their original tag (upsert
     with ignore_duplicates=True never overwrites), which is fine — the
     tag only needs to be right the first time a job is ever stored.
+
+    `location` is a resolve_fetch_location() dict (or None for the
+    historical India default). It steers the location-capable sources:
+    Adzuna's country endpoint + `where` city, JSearch's query text. The
+    remote-only sources (Remotive/Jobicy) and Greenhouse (global company
+    boards) are location-independent and run unchanged.
     """
-    logger.info(f"🔍 Starting job fetch for query: '{query}'")
+    logger.info(f"🔍 Starting job fetch for query: '{query}'" + (f" @ {location['raw']}" if location else ""))
 
     adzuna = AdzunaFetcher()
     jsearch = JSearchFetcher()
@@ -413,11 +500,21 @@ async def run_all_fetchers(query: str = "", category: str = "") -> int:
     greenhouse = GreenhouseFetcher()
     jobicy = JobicyFetcher()
 
+    if location is None:
+        adzuna_country, adzuna_where, jsearch_location = "in", None, None  # historical default
+    else:
+        # An unresolvable country must SKIP Adzuna (its API is per-country-
+        # endpoint), not silently fall back to India-results-for-a-Dubai-user.
+        # "unknown" is deliberately not in ADZUNA_COUNTRIES, so fetch() skips.
+        adzuna_country = location.get("country_code") or "unknown"
+        adzuna_where = location.get("city")
+        jsearch_location = location.get("city") or location.get("raw")
+
     # Run all fetchers concurrently — the query drives every source now, so the
     # free (no-key) sources work for any profession, not just design.
     results = await asyncio.gather(
-        adzuna.fetch(query=query),
-        jsearch.fetch(query=query),
+        adzuna.fetch(query=query, country=adzuna_country, where=adzuna_where),
+        jsearch.fetch(query=query, location_text=jsearch_location),
         remotive.fetch(query=query),
         greenhouse.fetch(query=query),
         jobicy.fetch(query=query),

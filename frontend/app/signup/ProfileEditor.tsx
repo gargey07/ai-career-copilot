@@ -94,6 +94,14 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
       work_type: p.work_type.includes(val) ? p.work_type.filter((v) => v !== val) : [...p.work_type, val],
     }));
 
+  const toggleSecondaryCategory = (val: string) =>
+    setProfile((p) => ({
+      ...p,
+      secondary_categories: (p.secondary_categories || []).includes(val)
+        ? (p.secondary_categories || []).filter((v) => v !== val)
+        : [...(p.secondary_categories || []), val],
+    }));
+
   const canSubmit = !!profile.basic_info.full_name.trim() && !!profile.basic_info.email.trim() && !loading;
 
   // Strategy: users can move items between Projects and Experience — e.g.
@@ -319,6 +327,32 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
               placeholder="e.g. DevOps Engineer, Content Writer…"
               helperText="Start typing — pick a suggestion or enter your own."
             />
+          </div>
+        )}
+
+        {/* Secondary categories — the matcher accepts jobs from any of
+            these too, so "fullstack, also open to backend" stops being an
+            either/or choice. Primary category is excluded from the list. */}
+        {!!profile.job_category && (
+          <div className="mt-6">
+            <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-muted)" }}>
+              Also open to <span className="font-normal">(optional)</span>
+            </label>
+            <div className="flex flex-wrap gap-2.5">
+              {JOB_CATEGORIES.filter((c) => c.value !== profile.job_category).map((cat) => (
+                <button
+                  key={cat.value}
+                  type="button"
+                  onClick={() => toggleSecondaryCategory(cat.value)}
+                  className={chipButton((profile.secondary_categories || []).includes(cat.value))}
+                >
+                  {cat.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs mt-2" style={{ color: "var(--text-muted)" }}>
+              We&apos;ll match you with jobs from these categories too.
+            </p>
           </div>
         )}
 

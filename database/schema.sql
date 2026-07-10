@@ -374,11 +374,9 @@ ALTER TABLE email_logs ADD COLUMN IF NOT EXISTS provider TEXT;
 -- these broaden which fetched-job categories count as relevant.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS secondary_categories TEXT[] DEFAULT '{}';
 
--- Salary transparency — stored only when the source API provides it;
--- the UI shows "Salary not disclosed" otherwise (never invented).
-ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_min      NUMERIC;
-ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_max      NUMERIC;
-ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_currency TEXT;
+-- (Salary columns already exist on jobs — salary_min/salary_max/currency
+-- in the base CREATE TABLE — and fetchers already populate them; the
+-- salary-display feature only reads them, no migration needed.)
 
 -- Application tracker — strictly user-asserted status transitions
 -- (applied|interviewing|offer|rejected), never inferred.

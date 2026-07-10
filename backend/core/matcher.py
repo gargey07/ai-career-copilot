@@ -73,22 +73,34 @@ def _user_terms(user: dict) -> set[str]:
     return terms
 
 
+def _user_categories(user: dict) -> set[str]:
+    """Primary job_category plus any secondary_categories ("also open to")
+    the user chose. All of them count as the user's profession for the
+    relevance gate — a fullstack dev open to backend roles should see
+    backend-tagged jobs, and only these categories, not everything."""
+    cats = {(user.get("job_category") or "").strip()}
+    cats |= {(c or "").strip() for c in (user.get("secondary_categories") or [])}
+    return {c for c in cats if c}
+
+
 def _category_terms(user: dict) -> set[str]:
-    """Narrower term set (category + target roles ONLY, no skills/tools)
+    """Narrower term set (categories + target roles ONLY, no skills/tools)
     used for category RELEVANCE gating — deliberately excludes skills/
     tools because those are too generic and are exactly why a Fullstack
     Developer's "javascript"/"api" skills could loosely match a UI/UX
     Designer job description under the broader _user_terms set."""
     terms: set[str] = set()
-    terms |= {w for w in _tokenize(str(user.get("job_category") or "").replace("_", " ")) if len(w) >= 2}
+    for category in _user_categories(user):
+        terms |= {w for w in _tokenize(category.replace("_", " ")) if len(w) >= 2}
     for role in (user.get("target_roles") or []):
         terms |= {w for w in _tokenize(role) if len(w) >= 2}
     return terms
 
 
-def _category_relevant(job: dict, user_category: str, category_terms: set[str]) -> bool:
+def _category_relevant(job: dict, user_categories: set[str], category_terms: set[str]) -> bool:
     """
-    True when `job` belongs to the user's profession. Prefers the exact
+    True when `job` belongs to one of the user's professions (primary
+    job_category + secondary_categories). Prefers the exact
     search_category tag stamped at fetch time (jobs/fetchers.py); jobs
     fetched before that column existed, or returned by the vector-search
     RPC (which doesn't carry the tag), fall back to a text check — at
@@ -97,7 +109,7 @@ def _category_relevant(job: dict, user_category: str, category_terms: set[str]) 
     """
     tag = job.get("search_category")
     if tag:
-        return tag == user_category
+        return tag in user_categories
     if not category_terms:
         return True  # nothing to check against — don't blanket-exclude
     # Generic multi-category nouns ("designer", "developer", ...) can't
@@ -190,6 +202,7 @@ async def embed_user_profile(user: dict) -> list[float]:
 
     profile_text = f"""
     Target Roles: {', '.join(user.get('target_roles', []))}
+    Also Open To: {', '.join(c.replace('_', ' ') for c in (user.get('secondary_categories') or []))}
     Experience Level: {user.get('experience_level', 'mid')}
     Location Preference: {', '.join(user.get('preferred_locations', []))}
     Remote Preference: {user.get('remote_preference', 'any')}
@@ -296,7 +309,7 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
             # alone can still be the wrong profession entirely (e.g. a
             # UI/UX Designer job scoring 74% for a Fullstack Developer).
             # Batch-fetch the tag for these candidates and filter by it.
-            user_category = (user.get("job_category") or "").strip()
+            user_categories = _user_categories(user)
             category_terms = _category_terms(user)
             job_ids = [j["id"] for j in jobs if j.get("id")]
             cat_by_id: dict[str, str | None] = {}
@@ -311,7 +324,7 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
             if cat_by_id is not None:
                 for j in jobs:
                     j["search_category"] = cat_by_id.get(j.get("id"))
-                relevant = [j for j in jobs if _category_relevant(j, user_category, category_terms)]
+                relevant = [j for j in jobs if _category_relevant(j, user_categories, category_terms)]
             else:
                 relevant = jobs
 
@@ -362,8 +375,8 @@ def keyword_match(
     """
     seen = seen or {}
     penalties = penalties or {"exclude_companies": set(), "demote_title_tokens": set()}
-    user_category = (user.get("job_category") or "").strip()
-    candidates = [j for j in jobs if _category_relevant(j, user_category, _category_terms(user))]
+    user_categories = _user_categories(user)
+    candidates = [j for j in jobs if _category_relevant(j, user_categories, _category_terms(user))]
     # Excluded companies are dropped before scoring (a hard "never again");
     # wrong-role title demotion must wait until AFTER scoring — it works by
     # multiplying match_score, which doesn't exist yet on raw candidates.

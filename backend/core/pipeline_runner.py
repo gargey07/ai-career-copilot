@@ -134,18 +134,61 @@ async def send_admin_alert(subject: str, body: str) -> None:
         logger.error(f"   Couldn't send admin alert ({subject}): {e}")
 
 
+# Each extra preferred location multiplies fetch volume; two per user keeps
+# the (category × location × query) fan-out inside the free-tier API budgets.
+MAX_FETCH_LOCATIONS_PER_USER = 2
+
+
+def _fetch_targets(users: list[dict]) -> list[tuple[str, dict | None]]:
+    """
+    Unique (category, location) fetch pairs across all active users. Every
+    user contributes their primary job_category AND their
+    secondary_categories ("also open to") — without fetching those too,
+    a secondary category could only ever match jobs other users' fetches
+    happened to pool. A user with no resolvable preferred_locations gets
+    (category, None) — the historical India default. Pairs are deduped by
+    category+country+city so ten London users cost one fetch, not ten.
+    """
+    from jobs.fetchers import resolve_fetch_location
+
+    targets: dict[tuple[str, str], tuple[str, dict | None]] = {}
+    for u in users:
+        categories = [(u.get("job_category") or "").strip() or "ui_ux_designer"]
+        categories += [c.strip() for c in (u.get("secondary_categories") or []) if c and c.strip()]
+        resolved = []
+        for raw in (u.get("preferred_locations") or [])[:MAX_FETCH_LOCATIONS_PER_USER * 2]:
+            loc = resolve_fetch_location(raw)
+            if loc:
+                resolved.append(loc)
+            if len(resolved) >= MAX_FETCH_LOCATIONS_PER_USER:
+                break
+        for category in dict.fromkeys(categories):  # order-preserving dedup
+            for loc in resolved or [None]:
+                key = (category, f"{loc['country_code']}|{(loc.get('city') or '').lower()}" if loc else "")
+                targets.setdefault(key, (category, loc))
+    return list(targets.values())
+
+
 async def run_fetch_and_match_jobs_only() -> dict:
     """Fetch → embed → match for all active users. No resumes/PDFs/email —
     the delivery half runs separately, per user, at their chosen digest slot."""
     supabase = get_supabase()
-    users = supabase.table("users").select("id, job_category").eq("is_active", True).execute().data or []
+    # secondary_categories is a newer column — degrade progressively so an
+    # un-run migration costs the feature, never the whole fetch phase.
+    try:
+        users = supabase.table("users").select("id, job_category, preferred_locations, secondary_categories").eq("is_active", True).execute().data or []
+    except Exception:
+        try:
+            users = supabase.table("users").select("id, job_category, preferred_locations").eq("is_active", True).execute().data or []
+        except Exception:
+            users = supabase.table("users").select("id, job_category").eq("is_active", True).execute().data or []
     categories = sorted({(u.get("job_category") or "").strip() or "ui_ux_designer" for u in users})
 
     total_fetched = 0
-    for category in categories:
+    for category, location in _fetch_targets(users):
         for query in _queries_for_category(category)[: settings.fetch_queries_per_category]:
             try:
-                total_fetched += await run_all_fetchers(query=query, category=category)
+                total_fetched += await run_all_fetchers(query=query, category=category, location=location)
             except Exception as e:
                 logger.error(f"   Fetch failed for '{category}' / '{query}': {e}")
 

@@ -106,6 +106,9 @@ class ConfirmProfileRequest(BaseModel):
     # Onboarding-specific fields — not part of the parsed-resume shape,
     # but collected on the same review screen.
     job_category: str = ""
+    # Categories the user is ALSO open to ("fullstack, but backend works
+    # too") — broadens which fetched-job categories the matcher accepts.
+    secondary_categories: list[str] = Field(default_factory=list)
     experience_level: str = "mid"
     preferred_locations: list[str] = Field(default_factory=list)
     work_type: list[str] = Field(default_factory=list)
@@ -314,14 +317,22 @@ async def _match_new_user(user_id: str) -> None:
     # against whatever pool already exists.
     try:
         from database.supabase_client import get_supabase
-        from jobs.fetchers import run_all_fetchers
+        from jobs.fetchers import run_all_fetchers, resolve_fetch_location
         from core.pipeline_runner import _queries_for_category
 
-        user_resp = get_supabase().table("users").select("job_category").eq("id", user_id).single().execute()
-        category = ((user_resp.data or {}).get("job_category") or "").strip()
+        user_resp = get_supabase().table("users").select("job_category, preferred_locations").eq("id", user_id).single().execute()
+        user_row = user_resp.data or {}
+        category = (user_row.get("job_category") or "").strip()
+        # First resolvable preferred location steers the signup fetch so a
+        # Dubai/London signup's first dashboard isn't full of India jobs.
+        location = next(
+            (loc for raw in (user_row.get("preferred_locations") or [])
+             if (loc := resolve_fetch_location(raw))),
+            None,
+        )
         if category:
             for query in _queries_for_category(category)[:1]:  # one query — signup latency matters
-                fetched = await run_all_fetchers(query=query, category=category)
+                fetched = await run_all_fetchers(query=query, category=category, location=location)
                 logger.info(f"⚡ Signup fetch for '{category}': {fetched} new jobs")
     except Exception as e:
         logger.warning(f"⚠️  Signup-time job fetch failed for {user_id}: {e}")
@@ -357,6 +368,7 @@ async def confirm_profile(payload: ConfirmProfileRequest, background_tasks: Back
         "phone": payload.basic_info.phone or None,
         "location": payload.basic_info.location or None,
         "job_category": payload.job_category or None,
+        "secondary_categories": payload.secondary_categories,
         "experience_level": payload.experience_level,
         "target_roles": payload.target_roles,
         "tools": payload.tools,
@@ -383,7 +395,7 @@ async def confirm_profile(payload: ConfirmProfileRequest, background_tasks: Back
 
     # Newer columns — if this database hasn't run the migration yet, drop the
     # offending column and retry so a signup never fails on a missing column.
-    newer_columns = ["resume_template", "projects"]
+    newer_columns = ["resume_template", "projects", "secondary_categories"]
     while True:
         try:
             resp = supabase.table("users").upsert(row, on_conflict="email").execute()

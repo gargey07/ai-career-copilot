@@ -66,6 +66,7 @@ export interface Profile {
   links: Links;
   confidence_flags: Record<string, string>;
   job_category: string;
+  secondary_categories: string[]; // categories the user is ALSO open to
   experience_level: string;
   preferred_locations: string[];
   work_type: string[];
@@ -85,6 +86,7 @@ export function emptyProfile(): Profile {
     links: { linkedin: "", portfolio: "", github: "" },
     confidence_flags: {},
     job_category: "",
+    secondary_categories: [],
     experience_level: "junior",
     preferred_locations: [],
     work_type: [],

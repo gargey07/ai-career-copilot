@@ -185,6 +185,72 @@ async def get_dashboard(user_id: str, t: str = Query("", description="Signed das
     return {"user": user, "jobs": jobs}
 
 
+@router.get("/{user_id}/profile")
+async def get_profile(user_id: str, t: str = Query("", description="Signed dashboard token")):
+    """
+    Full editable profile for the /profile edit screen — the Profile
+    Strength "Improve" CTA used to dump users back into the signup flow
+    with a blank form. Same token gate as the dashboard; saving goes back
+    through the existing /resumes/confirm upsert.
+    """
+    _require_dashboard_token(user_id, t)
+    supabase = get_supabase()
+
+    base_fields = (
+        "id, name, email, phone, location, summary, work_experience, education, "
+        "target_roles, skills, tools, job_category, experience_level, "
+        "preferred_locations, work_type, linkedin_url, portfolio_url, github_url, "
+        "resume_file_path, confidence_flags"
+    )
+    user_resp = None
+    for fields in (
+        f"{base_fields}, projects, resume_template, secondary_categories",
+        f"{base_fields}, projects, resume_template",
+        f"{base_fields}, projects",
+        base_fields,
+    ):
+        try:
+            user_resp = supabase.table("users").select(fields).eq("id", user_id).execute()
+            break
+        except Exception:
+            continue
+    if user_resp is None:
+        raise HTTPException(500, "We couldn't load this profile — please try again.")
+    if not user_resp.data:
+        raise HTTPException(404, "We couldn't find a profile for this link.")
+
+    u = user_resp.data[0]
+    # Shape mirrors frontend/lib/profile.ts Profile — the editor consumes it as-is.
+    return {
+        "basic_info": {
+            "full_name": u.get("name") or "",
+            "email": u.get("email") or "",
+            "phone": u.get("phone") or "",
+            "location": u.get("location") or "",
+        },
+        "summary": u.get("summary") or "",
+        "work_experience": u.get("work_experience") or [],
+        "projects": u.get("projects") or [],
+        "education": u.get("education") or [],
+        "target_roles": u.get("target_roles") or [],
+        "skills": u.get("skills") or [],
+        "tools": u.get("tools") or [],
+        "links": {
+            "linkedin": u.get("linkedin_url") or "",
+            "portfolio": u.get("portfolio_url") or "",
+            "github": u.get("github_url") or "",
+        },
+        "confidence_flags": u.get("confidence_flags") or {},
+        "job_category": u.get("job_category") or "",
+        "secondary_categories": u.get("secondary_categories") or [],
+        "experience_level": u.get("experience_level") or "mid",
+        "preferred_locations": u.get("preferred_locations") or [],
+        "work_type": u.get("work_type") or [],
+        "resume_template": u.get("resume_template") or "modern",
+        "resume_file_path": u.get("resume_file_path"),
+    }
+
+
 @router.post("/request-dashboard-link")
 async def request_dashboard_link(payload: DashboardLinkRequest, request: Request):
     """

@@ -333,6 +333,8 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
 
             if relevant:
                 fresh_jobs = _prioritize_fresh(relevant, seen, limit)
+                for j in fresh_jobs:
+                    j["match_breakdown"] = _build_breakdown(user, j, source="vector")
                 logger.info(
                     f"   Found {len(jobs)} candidates (vector), {len(relevant)} category-relevant, "
                     f"{len(fresh_jobs)} after freshness filter"
@@ -353,6 +355,31 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
         .execute()
     )
     return keyword_match(user, recent.data or [], limit, seen=seen, penalties=penalties)
+
+
+def _build_breakdown(user: dict, job: dict, source: str) -> dict:
+    """
+    "Why this matched" — ONLY facts the matcher actually computed
+    (docs/PRODUCT_STRATEGY_BETA.md: no decorative numbers, ever). Term
+    overlap is recomputed from the same _user_terms set the keyword scorer
+    uses; the vector path additionally carries its real similarity score.
+    Description text may be absent on RPC rows — then only title terms
+    show, which is still honest.
+    """
+    terms = _user_terms(user)
+    title_words = _tokenize(job.get("title", ""))
+    body_words = title_words | _tokenize(job.get("description", ""))
+    matched = sorted(t for t in terms if t in body_words)[:12]
+    title_matched = sorted(t for t in terms if t in title_words)[:8]
+    breakdown: dict = {
+        "source": source,
+        "matched_terms": matched,
+        "title_terms": title_matched,
+    }
+    if source == "vector":
+        score = job.get("match_score") or 0
+        breakdown["similarity"] = round(score / 100.0 if score > 1 else score, 4)
+    return breakdown
 
 
 def keyword_match(
@@ -412,7 +439,10 @@ def keyword_match(
 
     scored.sort(key=lambda j: j["match_score"], reverse=True)
     if scored:
-        return _prioritize_fresh(scored, seen, limit)
+        result = _prioritize_fresh(scored, seen, limit)
+        for j in result:
+            j["match_breakdown"] = _build_breakdown(user, j, source="keyword")
+        return result
     # No genuine keyword overlap even within category — still don't reach
     # outside it for filler.
     return _prioritize_fresh([{**job, "match_score": 0.3} for job in candidates], seen, limit)
@@ -437,14 +467,17 @@ async def store_matches(user_id: str, matched_jobs: list[dict]) -> int:
         if score > 1:
             score = score / 100.0
         fresh_job_ids.add(job["id"])
-        rows.append({
+        row = {
             "user_id": user_id,
             "job_id": job["id"],
             "match_score": round(min(score, 1.0), 4),
             "rank": rank,
             "digest_date": today,
             "status": "matched",
-        })
+        }
+        if job.get("match_breakdown"):
+            row["match_breakdown"] = job["match_breakdown"]
+        rows.append(row)
 
     # A same-day re-run (e.g. after fixing a matching bug like the
     # cross-category one) computes a fresh ranking, but the upsert below
@@ -491,6 +524,20 @@ async def store_matches(user_id: str, matched_jobs: list[dict]) -> int:
         logger.info(f"✅ Stored {count} job matches for user {user_id}")
         return count
     except Exception as e:
+        # match_breakdown is a newer column — an un-run migration must cost
+        # the "why this matched" detail, never the matches themselves (same
+        # pattern as store_jobs' search_category fallback).
+        if any("match_breakdown" in r for r in rows):
+            logger.warning(f"⚠️  Upsert with match_breakdown failed ({e}) — retrying without it.")
+            stripped = [{k: v for k, v in r.items() if k != "match_breakdown"} for r in rows]
+            resp = (
+                supabase.table("user_jobs")
+                .upsert(stripped, on_conflict="user_id,job_id,digest_date", ignore_duplicates=True)
+                .execute()
+            )
+            count = len(resp.data) if resp.data else 0
+            logger.info(f"✅ Stored {count} job matches for user {user_id} (without match_breakdown)")
+            return count
         logger.error(f"❌ Failed to store matches: {e}")
         raise
 

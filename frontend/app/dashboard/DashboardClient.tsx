@@ -34,6 +34,18 @@ interface Job {
   location: string;
   is_remote: boolean;
   source_url: string;
+  salary_min?: number | null;
+  salary_max?: number | null;
+  currency?: string | null;
+}
+
+// Components the matcher actually computed for this row — never decorative
+// (backend/core/matcher.py _build_breakdown).
+interface MatchBreakdown {
+  source?: string;
+  matched_terms?: string[];
+  title_terms?: string[];
+  similarity?: number;
 }
 interface UserJob {
   id: string;
@@ -53,6 +65,18 @@ interface UserJob {
   has_cover_letter?: boolean;
   // User-asserted application progress (applied/interviewing/offer/rejected).
   application_status?: string | null;
+  match_breakdown?: MatchBreakdown | null;
+}
+
+// Salary display — only ever real source-API numbers; most boards don't
+// publish one, and we say so instead of inventing a range.
+function formatSalary(job: Job): string | null {
+  const symbol = job.currency === "INR" ? "₹" : job.currency === "USD" ? "$" : job.currency === "GBP" ? "£" : job.currency === "EUR" ? "€" : job.currency ? `${job.currency} ` : "";
+  const fmt = (n: number) => (n >= 100000 ? `${Math.round(n / 1000)}k` : `${n}`);
+  if (job.salary_min && job.salary_max) return `${symbol}${fmt(job.salary_min)}–${symbol}${fmt(job.salary_max)}`;
+  if (job.salary_min) return `From ${symbol}${fmt(job.salary_min)}`;
+  if (job.salary_max) return `Up to ${symbol}${fmt(job.salary_max)}`;
+  return null;
 }
 
 // The signed dashboard token IS the user's key — backend endpoints reject
@@ -613,10 +637,62 @@ function NotRelevant({ userId, token, match }: { userId: string; token: string; 
   );
 }
 
+// ── "Why this matched" — real computed components only ─────────────────────────
+function WhyThisMatched({ breakdown }: { breakdown: MatchBreakdown }) {
+  const [open, setOpen] = useState(false);
+  const terms = breakdown.matched_terms || [];
+  const titleTerms = new Set(breakdown.title_terms || []);
+  if (!terms.length && breakdown.similarity == null) return null;
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="text-xs hover:underline"
+        style={{ color: "var(--text-muted)" }}
+        aria-expanded={open}
+      >
+        {open ? "Hide" : "Why this matched"}
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          {terms.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>From your profile:</span>
+              {terms.map((t) => (
+                <span
+                  key={t}
+                  className="px-2 py-0.5 rounded-full text-xs"
+                  style={
+                    titleTerms.has(t)
+                      ? { background: "#FEF3C7", color: "#B45309", border: "1px solid #FDE68A" }
+                      : { background: "var(--surface-muted)", color: "var(--text-muted)", border: "1px solid var(--border)" }
+                  }
+                  title={titleTerms.has(t) ? "Also appears in the job title" : "Appears in the job description"}
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+          )}
+          {breakdown.source === "vector" && (
+            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+              Ranked by overall similarity between your resume and this posting
+              {breakdown.similarity != null && ` (${Math.round(breakdown.similarity * 100)}%)`}.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Job card ─────────────────────────────────────────────────────────────────────
 function JobCard({ match, index, userId, token }: { match: UserJob; index: number; userId: string; token: string }) {
   const job = match.jobs;
   const hasApply = job.source_url && !job.source_url.includes("example.com");
+  const salary = formatSalary(job);
 
   // A resume was queued (has_optimized_resume) but never got a pdf_url:
   // either it's still in the narrow "generating" window (status still
@@ -641,6 +717,9 @@ function JobCard({ match, index, userId, token }: { match: UserJob; index: numbe
                 Remote
               </span>
             )}
+          </p>
+          <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+            {salary ?? "Salary not disclosed"}
           </p>
         </div>
         <ScoreBadge score={match.match_score} />
@@ -698,7 +777,10 @@ function JobCard({ match, index, userId, token }: { match: UserJob; index: numbe
         {match.pdf_url ? (
           <ResumeFeedback userId={userId} token={token} match={match} />
         ) : <span />}
-        <NotRelevant userId={userId} token={token} match={match} />
+        <div className="flex flex-wrap items-center gap-4">
+          {match.match_breakdown && <WhyThisMatched breakdown={match.match_breakdown} />}
+          <NotRelevant userId={userId} token={token} match={match} />
+        </div>
       </div>
     </Card>
   );
@@ -1154,7 +1236,11 @@ function DashboardContent() {
                 {user.profile_strength ?? 0}%
               </div>
               {(user.profile_strength ?? 0) < 100 && (
-                <a href="/signup" className="text-xs font-medium hover:underline" style={{ color: "var(--primary)" }}>
+                <a
+                  href={`/profile?t=${encodeURIComponent(token)}`}
+                  className="text-xs font-medium hover:underline"
+                  style={{ color: "var(--primary)" }}
+                >
                   Improve
                 </a>
               )}

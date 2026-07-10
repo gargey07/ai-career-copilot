@@ -29,10 +29,32 @@ from datetime import date
 
 from core.ai import get_ai_provider
 from core.config import get_settings
+from core.skill_maps import JOB_CATEGORIES
 from database.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+def _tokenize_category_name(category_key: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9+#.]+", category_key.replace("_", " ").lower()) if len(w) >= 2}
+
+
+# Words like "designer"/"developer"/"engineer"/"manager" appear in MORE THAN
+# ONE job_category name (ui_ux_designer AND graphic_designer both contain
+# "designer"; frontend/backend/fullstack/mobile_developer all contain
+# "developer"). A single shared word is not evidence a job is in the RIGHT
+# one of those professions — without this exclusion, an untagged Graphic
+# Designer job's title passes the UI/UX category gate on "designer" alone
+# (same for e.g. a Backend Developer job under a Frontend Developer user).
+# Only affects the untagged-job text-fallback path in _category_relevant;
+# jobs with a real search_category tag are matched exactly, unaffected.
+_GENERIC_ROLE_NOUNS = {
+    word
+    for key in JOB_CATEGORIES
+    for word in _tokenize_category_name(key)
+    if sum(1 for k2 in JOB_CATEGORIES if word in _tokenize_category_name(k2)) > 1
+}
 
 
 def _tokenize(text: str) -> set[str]:
@@ -78,9 +100,15 @@ def _category_relevant(job: dict, user_category: str, category_terms: set[str]) 
         return tag == user_category
     if not category_terms:
         return True  # nothing to check against — don't blanket-exclude
+    # Generic multi-category nouns ("designer", "developer", ...) can't
+    # single-handedly clear the title gate — see _GENERIC_ROLE_NOUNS.
+    specific_terms = category_terms - _GENERIC_ROLE_NOUNS
     title_words = _tokenize(job.get("title", ""))
-    if category_terms & title_words:
+    if specific_terms and (specific_terms & title_words):
         return True
+    # The two-term description check still allows the full term set
+    # (including generic nouns) — requiring two co-occurring terms is
+    # already a much weaker false-positive risk than one.
     desc_words = _tokenize(job.get("description", ""))
     return len(category_terms & desc_words) >= 2
 

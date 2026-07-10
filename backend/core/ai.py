@@ -28,6 +28,14 @@ settings = get_settings()
 _GEMINI_MIN_DELAY = 4.0  # seconds between requests (60s / 15 RPM = 4s)
 _last_gemini_call = 0.0
 
+# The openai SDK's default timeout is 600s (connect=5, read/write/pool=600).
+# A provider that's reachable but silently hangs on the read (rather than
+# cleanly erroring) would tie up the waterfall for up to 10 minutes before
+# falling through to the next one — with several fallbacks configured that
+# compounds fast. A resume/cover-letter generation is one short completion
+# call; if it hasn't answered in 25s, treat it as failed and move on.
+_PROVIDER_TIMEOUT_SECONDS = 25.0
+
 
 # ── Abstract Base ─────────────────────────────────────────────────────────────
 class AIProvider(ABC):
@@ -75,6 +83,7 @@ class GeminiProvider(AIProvider):
             response = self.model.generate_content(
                 prompt,
                 generation_config=genai.GenerationConfig(temperature=temperature),
+                request_options={"timeout": _PROVIDER_TIMEOUT_SECONDS},
             )
             _last_gemini_call = time.time()
             return response.text.strip()
@@ -105,7 +114,7 @@ class OpenAIProvider(AIProvider):
 
     def __init__(self):
         from openai import AsyncOpenAI
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+        self.client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=_PROVIDER_TIMEOUT_SECONDS)
         logger.info("✅ OpenAI provider initialized")
 
     async def generate_text(self, prompt: str, temperature: float = 0.3) -> str:
@@ -149,7 +158,7 @@ class _ChatCompletionsProvider(AIProvider):
         self.name = name
         self.model = model
         self.daily_limit = daily_limit
-        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=_PROVIDER_TIMEOUT_SECONDS)
 
     async def generate_text(self, prompt: str, temperature: float = 0.3) -> str:
         if not check_budget(self.name, self.daily_limit):

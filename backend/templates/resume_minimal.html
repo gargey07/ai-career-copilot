@@ -47,17 +47,6 @@
       content: '  \00B7  ';
       color: #CBD5E1;
     }
-    .tailored {
-      margin-top: 5px;
-      display: inline-block;
-      font-size: 7.5pt;
-      font-weight: 600;
-      color: #B45309;
-      background: #FEF3C7;
-      border-radius: 4px;
-      padding: 2px 8px;
-    }
-
     /* ── Section ────────────────────────────────────────── */
     .section { margin-bottom: 16px; }
     .section-title {
@@ -134,9 +123,6 @@
       {% if user_email %}<span>{{ user_email }}</span>{% endif %}
       {% if user_location %}<span>{{ user_location }}</span>{% endif %}
     </div>
-    {% if job_title %}
-    <div class="tailored">Tailored for {{ job_title }}{% if company %} &middot; {{ company }}{% endif %}</div>
-    {% endif %}
   </div>
 
   {% if summary %}

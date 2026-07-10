@@ -65,33 +65,6 @@
     }
     .header-meta span:first-child::before { display: none; }
 
-    /* ── Applied For badge ──────────────────────────────── */
-    .applied-badge {
-      position: absolute;
-      top: 28px; right: 40px;
-      background: rgba(255,255,255,0.12);
-      border: 1px solid rgba(255,255,255,0.2);
-      border-radius: 8px;
-      padding: 8px 14px;
-      text-align: right;
-    }
-    .applied-badge .label {
-      font-size: 7pt;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      color: rgba(255,255,255,0.55);
-    }
-    .applied-badge .value {
-      font-size: 10pt;
-      font-weight: 600;
-      color: white;
-      margin-top: 2px;
-    }
-    .applied-badge .company {
-      font-size: 8.5pt;
-      color: rgba(255,255,255,0.7);
-    }
-
     /* ── Body ───────────────────────────────────────────── */
     .body {
       padding: 28px 40px;
@@ -231,13 +204,6 @@
       {% if user_location %}<span>{{ user_location }}</span>{% endif %}
     </div>
 
-    {% if job_title %}
-    <div class="applied-badge">
-      <div class="label">Tailored for</div>
-      <div class="value">{{ job_title }}</div>
-      {% if company %}<div class="company">{{ company }}</div>{% endif %}
-    </div>
-    {% endif %}
   </div>
 
   <!-- Body -->

@@ -114,7 +114,12 @@ class OpenAIProvider(AIProvider):
 
     def __init__(self):
         from openai import AsyncOpenAI
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=_PROVIDER_TIMEOUT_SECONDS)
+        # max_retries=0: our own waterfall already fails over to the next
+        # PROVIDER on any error, so the SDK's built-in retry-with-backoff on
+        # this same provider (e.g. ~20-30s waits on a 429, observed live)
+        # only adds latency without adding a real chance of success — Gemini's
+        # 20/day quota or another provider's rate limit doesn't clear in 30s.
+        self.client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=_PROVIDER_TIMEOUT_SECONDS, max_retries=0)
         logger.info("✅ OpenAI provider initialized")
 
     async def generate_text(self, prompt: str, temperature: float = 0.3) -> str:
@@ -158,7 +163,10 @@ class _ChatCompletionsProvider(AIProvider):
         self.name = name
         self.model = model
         self.daily_limit = daily_limit
-        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=_PROVIDER_TIMEOUT_SECONDS)
+        # max_retries=0 — see the matching comment on OpenAIProvider above;
+        # our waterfall is the retry strategy, the SDK's own retry on this
+        # same rate-limited provider is pure added latency.
+        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=_PROVIDER_TIMEOUT_SECONDS, max_retries=0)
 
     async def generate_text(self, prompt: str, temperature: float = 0.3) -> str:
         if not check_budget(self.name, self.daily_limit):

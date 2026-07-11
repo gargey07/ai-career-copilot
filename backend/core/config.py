@@ -147,6 +147,14 @@ class Settings(BaseSettings):
     # onboarding), so still worth a sane per-IP daily ceiling.
     resume_preview_daily_limit_per_ip: int = 200
 
+    # PDF rendering engine: 'chromium' (Playwright, the long-standing
+    # default) or 'weasyprint' (pure-Python, ~10x lighter on RAM, needs
+    # pango/cairo system libs). Set PDF_ENGINE=weasyprint on the server to
+    # switch after eyeballing live output; unsetting rolls straight back.
+    # A weasyprint failure at render time falls back to chromium for that
+    # PDF rather than failing the generation.
+    pdf_engine: str = "chromium"
+
     # Shared secret to authorize the manual pipeline trigger (POST /api/admin/run-pipeline).
     # Empty = trigger disabled (safe default). Set ADMIN_TOKEN on the server to enable.
     admin_token: str = ""

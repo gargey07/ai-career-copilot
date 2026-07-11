@@ -27,6 +27,11 @@ openai==1.30.1                 # fallback provider
 
 # ── PDF Generation ───────────────────────────────────────
 playwright==1.44.0
+# Alternative engine (PDF_ENGINE=weasyprint) — pure-Python, no Chromium
+# process. Needs system libs (pango/cairo) at IMPORT time only; the import
+# is lazy and render_pdf falls back to chromium, so a host without them
+# still deploys and renders fine on the default engine.
+weasyprint==69.0
 
 # ── Resume Upload Parsing ─────────────────────────────────
 pdfplumber==0.11.1              # PDF text extraction (MIT licensed)

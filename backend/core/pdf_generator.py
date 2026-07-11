@@ -362,6 +362,53 @@ async def html_to_pdf(html_content: str, output_path: str) -> int:
     return size
 
 
+# WeasyPrint expresses page size/margins in CSS @page, where Chromium takes
+# them as page.pdf() arguments — this mirrors those exact values so the two
+# engines produce the same geometry. Injected at render time so the
+# templates themselves stay engine-neutral.
+_WEASYPRINT_PAGE_CSS = "<style>@page { size: A4; margin: 0 0 10mm 0; }</style>"
+
+
+async def html_to_pdf_weasyprint(html_content: str, output_path: str) -> int:
+    """
+    Render HTML to PDF using WeasyPrint (TICKET-027 alternative engine —
+    pure Python, no Chromium process, ~10x lighter on RAM). Import is lazy
+    so a deploy image without pango/cairo still boots fine on the default
+    chromium engine. Sync + CPU-bound, so it runs in a worker thread to
+    keep the event loop free.
+    """
+    TMP_DIR.mkdir(exist_ok=True)
+    from weasyprint import HTML  # lazy: needs system libs (pango/cairo)
+
+    if "</head>" in html_content:
+        html_content = html_content.replace("</head>", _WEASYPRINT_PAGE_CSS + "</head>", 1)
+    else:
+        html_content = _WEASYPRINT_PAGE_CSS + html_content
+
+    def _render() -> None:
+        HTML(string=html_content).write_pdf(output_path)
+
+    await asyncio.to_thread(_render)
+    size = os.path.getsize(output_path)
+    logger.info(f"   PDF rendered (weasyprint): {output_path} ({size:,} bytes)")
+    return size
+
+
+async def render_pdf(html_content: str, output_path: str) -> int:
+    """
+    Engine dispatch for PDF rendering (PDF_ENGINE setting). weasyprint
+    failures — missing system libs on this host, a render bug on this
+    document — fall back to chromium for that PDF instead of failing the
+    generation; the warning log is the signal to investigate.
+    """
+    if settings.pdf_engine.lower() == "weasyprint":
+        try:
+            return await html_to_pdf_weasyprint(html_content, output_path)
+        except Exception as e:
+            logger.warning(f"⚠️  weasyprint render failed ({type(e).__name__}: {e}) — falling back to chromium for this PDF")
+    return await html_to_pdf(html_content, output_path)
+
+
 # ── Supabase Storage Upload ───────────────────────────────────────────────────
 
 def upload_to_supabase_storage(pdf_path: str, storage_path: str) -> Optional[str]:
@@ -533,7 +580,7 @@ async def generate_pdf_for_match(user_job_id: str) -> Optional[str]:
         )
 
         async with _pdf_lock:
-            await asyncio.wait_for(html_to_pdf(html, pdf_local_path), timeout=PDF_GENERATION_TIMEOUT_SECONDS)
+            await asyncio.wait_for(render_pdf(html, pdf_local_path), timeout=PDF_GENERATION_TIMEOUT_SECONDS)
 
         today = date.today().isoformat()
         storage_path = f"{match['user_id']}/{today}/{pdf_filename}"

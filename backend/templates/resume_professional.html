@@ -111,8 +111,8 @@
       {% if target_role %}<div class="header-role">{{ target_role }}</div>{% endif %}
     </div>
     <div class="header-contact">
-      {% if user_email %}{{ user_email }}<br/>{% endif %}
-      {% if user_location %}{{ user_location }}{% endif %}
+      {% set contact_lines = [user_email, user_location, linkedin_label, portfolio_label, github_label] | select | list %}
+      {% for line in contact_lines %}{{ line }}{% if not loop.last %}<br/>{% endif %}{% endfor %}
     </div>
   </div>
 

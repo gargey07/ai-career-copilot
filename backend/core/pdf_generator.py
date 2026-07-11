@@ -278,6 +278,18 @@ def parse_resume_sections(resume_text: str) -> dict:
 
 # ── HTML Rendering ────────────────────────────────────────────────────────────
 
+def _short_link(url: str) -> str:
+    """'https://www.linkedin.com/in/jdoe/' -> 'linkedin.com/in/jdoe' — the
+    printed resume shows a readable label, not a raw URL; the link itself
+    (href, where the template uses one) still carries the full address."""
+    text = (url or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"^https?://", "", text)
+    text = re.sub(r"^www\.", "", text)
+    return text.rstrip("/")
+
+
 def render_resume_html(
     user_name: str,
     user_email: str,
@@ -287,6 +299,9 @@ def render_resume_html(
     template_name: str = "modern",
     target_role: str = "",
     user_location: str = "",
+    linkedin_url: str = "",
+    portfolio_url: str = "",
+    github_url: str = "",
 ) -> str:
     """Render resume text into a beautiful HTML page using a Jinja2 template."""
     env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
@@ -301,6 +316,12 @@ def render_resume_html(
         company=company,
         target_role=target_role or job_title,
         user_location=user_location,
+        linkedin_url=linkedin_url,
+        linkedin_label=_short_link(linkedin_url),
+        portfolio_url=portfolio_url,
+        portfolio_label=_short_link(portfolio_url),
+        github_url=github_url,
+        github_label=_short_link(github_url),
         today=date.today().strftime("%B %d, %Y"),
         **sections,
     )
@@ -445,13 +466,25 @@ async def generate_pdf_for_match(user_job_id: str) -> Optional[str]:
         return None
 
     # Fetch user
-    user_resp = (
-        supabase.table("users")
-        .select("name, email, preferred_locations, resume_template")
-        .eq("id", match["user_id"])
-        .single()
-        .execute()
-    )
+    # linkedin_url/portfolio_url/github_url are older columns than this
+    # select statement — degrade to a plain select without them rather
+    # than let a naming drift break PDF generation entirely.
+    try:
+        user_resp = (
+            supabase.table("users")
+            .select("name, email, preferred_locations, resume_template, linkedin_url, portfolio_url, github_url")
+            .eq("id", match["user_id"])
+            .single()
+            .execute()
+        )
+    except Exception:
+        user_resp = (
+            supabase.table("users")
+            .select("name, email, preferred_locations, resume_template")
+            .eq("id", match["user_id"])
+            .single()
+            .execute()
+        )
     user = user_resp.data or {}
     locations = user.get("preferred_locations") or []
     user_location = locations[0] if locations else ""
@@ -494,6 +527,9 @@ async def generate_pdf_for_match(user_job_id: str) -> Optional[str]:
             resume_text=resume_text,
             template_name=template_name,
             user_location=user_location,
+            linkedin_url=user.get("linkedin_url") or "",
+            portfolio_url=user.get("portfolio_url") or "",
+            github_url=user.get("github_url") or "",
         )
 
         async with _pdf_lock:

@@ -12,8 +12,8 @@ interface SearchSelectProps {
   values: string[];
   onChange: (values: string[]) => void;
   /** Backend-suggestion field — fetches from /api/suggestions/{apiField}?q= */
-  apiField?: "roles" | "tools" | "skills";
-  /** Local static list to filter instead of calling the API (e.g. locations) */
+  apiField?: "roles" | "tools" | "skills" | "locations";
+  /** Local static list to filter instead of calling the API */
   staticOptions?: string[];
   placeholder?: string;
   helperText?: string;

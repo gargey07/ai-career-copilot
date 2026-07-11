@@ -10,7 +10,7 @@ interface SearchInputProps {
   label: string;
   value: string;
   onChange: (value: string) => void;
-  apiField: "roles" | "tools" | "skills";
+  apiField: "roles" | "tools" | "skills" | "locations";
   placeholder?: string;
   helperText?: string;
 }

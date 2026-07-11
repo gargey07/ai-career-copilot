@@ -56,7 +56,6 @@ const JOB_CATEGORIES: { value: string; label: string; icon: LucideIcon }[] = [
   { value: "data_scientist", label: "Data Scientist / ML", icon: Brain },
 ];
 
-const LOCATIONS = ["Remote", "Bangalore", "Mumbai", "Delhi", "Hyderabad", "Pune", "Chennai", "Anywhere in India"];
 const EXP_LEVELS = [
   { value: "fresher", label: "Fresher (0–1 yr)" },
   { value: "junior", label: "Junior (1–3 yrs)" },
@@ -101,6 +100,20 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
         ? (p.secondary_categories || []).filter((v) => v !== val)
         : [...(p.secondary_categories || []), val],
     }));
+
+  // Picking a category also seeds Target Roles with its label, but only
+  // when the user hasn't typed anything there yet — the two fields answer
+  // related but different questions (category = what we fetch for;
+  // target roles = specific titles that refine matching), and typing
+  // "UI/UX Designer" in both felt like the same question asked twice.
+  const pickCategory = (value: string, label?: string) => {
+    setOtherCategory(!label);
+    setProfile((p) => ({
+      ...p,
+      job_category: value,
+      target_roles: label && p.target_roles.length === 0 ? [label] : p.target_roles,
+    }));
+  };
 
   const canSubmit = !!profile.basic_info.full_name.trim() && !!profile.basic_info.email.trim() && !loading;
 
@@ -199,6 +212,114 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
         </div>
       </SectionCard>
 
+      {/* Job Category */}
+      <SectionCard icon={Briefcase} title="What kind of jobs are you looking for?">
+        <p className="text-sm -mt-3 mb-4" style={{ color: "var(--text-muted)" }}>
+          This sets your main search — we fetch jobs for this category. (You can add specific
+          job titles below, and other categories you're also open to.)
+        </p>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {JOB_CATEGORIES.map((cat) => {
+            const active = !otherCategory && profile.job_category === cat.value;
+            return (
+              <button
+                key={cat.value}
+                type="button"
+                onClick={() => pickCategory(cat.value, cat.label)}
+                className={`p-4 rounded-md text-left transition border ${
+                  active ? "bg-[#FEF3C7] border-[var(--primary)]" : "border-[var(--border)] hover:border-[var(--primary)]"
+                }`}
+              >
+                <cat.icon size={22} strokeWidth={1.75} style={{ color: active ? "var(--primary)" : "var(--text-muted)" }} />
+                <div className="text-sm font-semibold mt-2" style={{ color: "var(--text)" }}>{cat.label}</div>
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            onClick={() => {
+              setOtherCategory(true);
+              update("job_category", "");
+            }}
+            className={`p-4 rounded-md text-left transition border ${
+              otherCategory ? "bg-[#FEF3C7] border-[var(--primary)]" : "border-[var(--border)] hover:border-[var(--primary)]"
+            }`}
+          >
+            <Search size={22} strokeWidth={1.75} style={{ color: otherCategory ? "var(--primary)" : "var(--text-muted)" }} />
+            <div className="text-sm font-semibold mt-2" style={{ color: "var(--text)" }}>Other — search</div>
+          </button>
+        </div>
+
+        {otherCategory && (
+          <div className="mt-4">
+            <SearchInput
+              label="Your role"
+              value={profile.job_category}
+              onChange={(v) => setProfile((p) => ({
+                ...p,
+                job_category: v,
+                target_roles: v && p.target_roles.length === 0 ? [v] : p.target_roles,
+              }))}
+              apiField="roles"
+              placeholder="e.g. DevOps Engineer, Content Writer…"
+              helperText="Start typing — pick a suggestion or enter your own."
+            />
+          </div>
+        )}
+
+        {/* Secondary categories — the matcher accepts jobs from any of
+            these too, so "fullstack, also open to backend" stops being an
+            either/or choice. Primary category is excluded from the list. */}
+        {!!profile.job_category && (
+          <div className="mt-6">
+            <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-muted)" }}>
+              Also open to <span className="font-normal">(optional)</span>
+            </label>
+            <div className="flex flex-wrap gap-2.5">
+              {JOB_CATEGORIES.filter((c) => c.value !== profile.job_category).map((cat) => (
+                <button
+                  key={cat.value}
+                  type="button"
+                  onClick={() => toggleSecondaryCategory(cat.value)}
+                  className={chipButton((profile.secondary_categories || []).includes(cat.value))}
+                >
+                  {cat.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs mt-2" style={{ color: "var(--text-muted)" }}>
+              We&apos;ll match you with jobs from these categories too.
+            </p>
+          </div>
+        )}
+
+        <div className="mt-6 space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-muted)" }}>Experience level</label>
+            <div className="flex flex-wrap gap-2.5">
+              {EXP_LEVELS.map((l) => (
+                <button key={l.value} type="button" onClick={() => update("experience_level", l.value)} className={chipButton(profile.experience_level === l.value)}>
+                  {l.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-muted)" }}>Work type</label>
+            <p className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>
+              How you want to work — separate from where (that's Preferred locations, below).
+            </p>
+            <div className="flex flex-wrap gap-2.5">
+              {WORK_TYPES.map((w) => (
+                <button key={w} type="button" onClick={() => toggleWorkType(w)} className={chipButton(profile.work_type.includes(w))}>
+                  {w}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </SectionCard>
+
       {/* Summary */}
       <SectionCard icon={FileText} title="Summary" action={<RecommendedChip />}>
         <Field label="Professional summary" error={flag("summary") ? "We're not fully confident in this — worth a quick edit." : undefined}>
@@ -277,116 +398,19 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
         </div>
       </SectionCard>
 
-      {/* Job Category */}
-      <SectionCard icon={Briefcase} title="What kind of jobs are you looking for?">
-        <p className="text-sm -mt-3 mb-4" style={{ color: "var(--text-muted)" }}>
-          This helps us fetch the right jobs and expand your skills correctly.
-        </p>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          {JOB_CATEGORIES.map((cat) => {
-            const active = !otherCategory && profile.job_category === cat.value;
-            return (
-              <button
-                key={cat.value}
-                type="button"
-                onClick={() => {
-                  setOtherCategory(false);
-                  update("job_category", cat.value);
-                }}
-                className={`p-4 rounded-md text-left transition border ${
-                  active ? "bg-[#FEF3C7] border-[var(--primary)]" : "border-[var(--border)] hover:border-[var(--primary)]"
-                }`}
-              >
-                <cat.icon size={22} strokeWidth={1.75} style={{ color: active ? "var(--primary)" : "var(--text-muted)" }} />
-                <div className="text-sm font-semibold mt-2" style={{ color: "var(--text)" }}>{cat.label}</div>
-              </button>
-            );
-          })}
-          <button
-            type="button"
-            onClick={() => {
-              setOtherCategory(true);
-              update("job_category", "");
-            }}
-            className={`p-4 rounded-md text-left transition border ${
-              otherCategory ? "bg-[#FEF3C7] border-[var(--primary)]" : "border-[var(--border)] hover:border-[var(--primary)]"
-            }`}
-          >
-            <Search size={22} strokeWidth={1.75} style={{ color: otherCategory ? "var(--primary)" : "var(--text-muted)" }} />
-            <div className="text-sm font-semibold mt-2" style={{ color: "var(--text)" }}>Other — search</div>
-          </button>
-        </div>
-
-        {otherCategory && (
-          <div className="mt-4">
-            <SearchInput
-              label="Your role"
-              value={profile.job_category}
-              onChange={(v) => update("job_category", v)}
-              apiField="roles"
-              placeholder="e.g. DevOps Engineer, Content Writer…"
-              helperText="Start typing — pick a suggestion or enter your own."
-            />
-          </div>
-        )}
-
-        {/* Secondary categories — the matcher accepts jobs from any of
-            these too, so "fullstack, also open to backend" stops being an
-            either/or choice. Primary category is excluded from the list. */}
-        {!!profile.job_category && (
-          <div className="mt-6">
-            <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-muted)" }}>
-              Also open to <span className="font-normal">(optional)</span>
-            </label>
-            <div className="flex flex-wrap gap-2.5">
-              {JOB_CATEGORIES.filter((c) => c.value !== profile.job_category).map((cat) => (
-                <button
-                  key={cat.value}
-                  type="button"
-                  onClick={() => toggleSecondaryCategory(cat.value)}
-                  className={chipButton((profile.secondary_categories || []).includes(cat.value))}
-                >
-                  {cat.label}
-                </button>
-              ))}
-            </div>
-            <p className="text-xs mt-2" style={{ color: "var(--text-muted)" }}>
-              We&apos;ll match you with jobs from these categories too.
-            </p>
-          </div>
-        )}
-
-        <div className="mt-6 space-y-4">
-          <div>
-            <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-muted)" }}>Experience level</label>
-            <div className="flex flex-wrap gap-2.5">
-              {EXP_LEVELS.map((l) => (
-                <button key={l.value} type="button" onClick={() => update("experience_level", l.value)} className={chipButton(profile.experience_level === l.value)}>
-                  {l.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-muted)" }}>Work type</label>
-            <div className="flex flex-wrap gap-2.5">
-              {WORK_TYPES.map((w) => (
-                <button key={w} type="button" onClick={() => toggleWorkType(w)} className={chipButton(profile.work_type.includes(w))}>
-                  {w}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </SectionCard>
-
       {/* Roles / Skills / Tools / Locations */}
       <SectionCard icon={Target} title="Roles, Skills & Tools" action={<RecommendedChip />}>
         <div className="space-y-6">
-          <SearchSelect label="Target roles" values={profile.target_roles} onChange={(v) => update("target_roles", v)} apiField="roles" helperText="Search any job title — not limited to the categories above." />
+          <SearchSelect label="Target roles" values={profile.target_roles} onChange={(v) => update("target_roles", v)} apiField="roles" helperText="Specific titles within your category — add a few variants (e.g. 'Frontend Developer', 'React Developer') to widen matching." />
           <SearchSelect label="Tools" values={profile.tools} onChange={(v) => update("tools", v)} apiField="tools" helperText='Our AI expands these — e.g. "Figma" → Prototyping, Dev Handoff.' />
           <SearchSelect label="Skills" values={profile.skills} onChange={(v) => update("skills", v)} apiField="skills" />
-          <SearchSelect label="Preferred locations" values={profile.preferred_locations} onChange={(v) => update("preferred_locations", v)} staticOptions={LOCATIONS} helperText="Not in the list? Type it and hit Enter." />
+          <SearchSelect
+            label="Preferred locations"
+            values={profile.preferred_locations}
+            onChange={(v) => update("preferred_locations", v)}
+            apiField="locations"
+            helperText="Cities, countries, or 'Remote — Worldwide' if location doesn't matter. Not in the list? Type it and hit Enter."
+          />
         </div>
       </SectionCard>
 

@@ -17,6 +17,7 @@ import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from core.config import get_settings
+from core.locations import ADZUNA_COUNTRIES, resolve_fetch_location
 from core.usage_guard import check_budget
 from database.supabase_client import get_supabase
 
@@ -60,72 +61,9 @@ def normalize_job(
 
 
 # ── Location resolution ───────────────────────────────────────────────────────
-# Users type free-text locations ("Dubai", "London, UK", "United States") in
-# preferred_locations. These maps turn that into something the APIs accept.
-# Adzuna is per-country-ENDPOINT — only these country codes exist there:
-ADZUNA_COUNTRIES = {
-    "at", "au", "be", "br", "ca", "ch", "de", "es", "fr", "gb", "in", "it",
-    "mx", "nl", "nz", "pl", "sg", "us", "za",
-}
-
-_COUNTRY_CODES = {
-    "india": "in",
-    "united kingdom": "gb", "uk": "gb", "england": "gb", "great britain": "gb", "scotland": "gb",
-    "united states": "us", "usa": "us", "us": "us", "america": "us", "united states of america": "us",
-    "canada": "ca", "australia": "au", "germany": "de", "france": "fr",
-    "netherlands": "nl", "singapore": "sg", "new zealand": "nz",
-    "austria": "at", "belgium": "be", "brazil": "br", "switzerland": "ch",
-    "spain": "es", "italy": "it", "mexico": "mx", "poland": "pl", "south africa": "za",
-    # Not on Adzuna, but still resolvable so JSearch can serve them:
-    "uae": "ae", "united arab emirates": "ae", "ireland": "ie", "japan": "jp",
-    "qatar": "qa", "saudi arabia": "sa",
-}
-
-_CITY_COUNTRY = {
-    # India
-    "mumbai": "in", "delhi": "in", "new delhi": "in", "bangalore": "in", "bengaluru": "in",
-    "hyderabad": "in", "chennai": "in", "pune": "in", "kolkata": "in", "ahmedabad": "in",
-    "gurgaon": "in", "gurugram": "in", "noida": "in", "jaipur": "in", "surat": "in",
-    # Gulf
-    "dubai": "ae", "abu dhabi": "ae", "sharjah": "ae", "doha": "qa", "riyadh": "sa", "jeddah": "sa",
-    # UK / Europe
-    "london": "gb", "manchester": "gb", "birmingham": "gb", "edinburgh": "gb",
-    "berlin": "de", "munich": "de", "frankfurt": "de", "paris": "fr", "amsterdam": "nl",
-    "dublin": "ie", "zurich": "ch", "madrid": "es", "barcelona": "es", "milan": "it", "warsaw": "pl",
-    # North America
-    "new york": "us", "san francisco": "us", "seattle": "us", "austin": "us", "boston": "us",
-    "chicago": "us", "los angeles": "us", "toronto": "ca", "vancouver": "ca",
-    # APAC / other
-    "singapore": "sg", "sydney": "au", "melbourne": "au", "auckland": "nz", "tokyo": "jp",
-    "sao paulo": "br", "mexico city": "mx", "johannesburg": "za", "cape town": "za",
-}
-
-_COUNTRY_NAMES = {code: name.title() for name, code in _COUNTRY_CODES.items()}
-_REMOTE_WORDS = {"remote", "anywhere", "work from home", "wfh"}
-
-
-def resolve_fetch_location(raw: str) -> Optional[dict]:
-    """
-    Free-text preferred_location -> {"raw", "country_code", "city"} fetch
-    target, or None for remote/empty entries (remote sources always run
-    regardless of location). Unknown places still resolve — with
-    country_code=None — so JSearch can use the raw text even when Adzuna
-    (country-endpoint-based) has to sit that fetch out.
-    """
-    text = (raw or "").strip()
-    key = re.sub(r"\s+", " ", text.lower()).strip(" .")
-    if not key or key in _REMOTE_WORDS:
-        return None
-    if key in _COUNTRY_CODES:
-        return {"raw": text, "country_code": _COUNTRY_CODES[key], "city": None}
-    if key in _CITY_COUNTRY:
-        return {"raw": text, "country_code": _CITY_COUNTRY[key], "city": text}
-    if "," in key:  # "City, Country"
-        city_part, _, country_part = key.partition(",")
-        city_part, country_part = city_part.strip(), country_part.strip()
-        code = _COUNTRY_CODES.get(country_part) or _CITY_COUNTRY.get(city_part)
-        return {"raw": text, "country_code": code, "city": city_part.title()}
-    return {"raw": text, "country_code": None, "city": text}
+# ADZUNA_COUNTRIES and resolve_fetch_location() now live in core/locations.py
+# (shared with the /api/suggestions/locations autosuggest endpoint) —
+# imported above.
 
 
 # ── Query matching (profession-agnostic) ──────────────────────────────────────

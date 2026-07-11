@@ -16,6 +16,7 @@ import {
   ThumbsDown,
   RefreshCw,
   Mail,
+  MapPin,
   type LucideIcon,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
@@ -1031,6 +1032,10 @@ function DashboardContent() {
   // Clicking the "Resumes Ready" stat card filters the whole page down to
   // matches with a finished PDF; clicking again clears it.
   const [showOnlyReady, setShowOnlyReady] = useState(false);
+  // One-time view filter by job location — never persisted, never touches
+  // the saved preferred_locations. "" = off, "__remote__" = remote jobs,
+  // anything else = exact location string from the loaded jobs.
+  const [locationFilter, setLocationFilter] = useState("");
   // Today's list is capped by default — pipeline re-runs in a single day
   // can pile up dozens of matches and bury the page.
   const [showAllToday, setShowAllToday] = useState(false);
@@ -1140,11 +1145,32 @@ function DashboardContent() {
   }
 
   const firstName = user.name?.split(" ")[0] || "there";
-  const todayMatches = allJobs.filter((j) => j.digest_date === today);
+
+  // Location filter options come from the jobs actually loaded — no
+  // taxonomy call needed, and every option is guaranteed to match something.
+  const locationSet = new Set<string>();
+  let hasRemote = false;
+  for (const j of allJobs) {
+    if (j.jobs.is_remote) hasRemote = true;
+    const loc = (j.jobs.location || "").trim();
+    if (loc && !/^(not specified|remote)$/i.test(loc)) locationSet.add(loc);
+  }
+  const locationOptions = Array.from(locationSet).sort();
+  const matchesLocation = (m: UserJob) =>
+    locationFilter === "" ||
+    (locationFilter === "__remote__"
+      ? m.jobs.is_remote
+      : (m.jobs.location || "").trim() === locationFilter);
+  // Applying the filter up here means today/ready/history views all
+  // respect it (and it composes with the Resumes Ready filter); the
+  // applications tracker below deliberately stays unfiltered.
+  const visibleJobs = locationFilter ? allJobs.filter(matchesLocation) : allJobs;
+
+  const todayMatches = visibleJobs.filter((j) => j.digest_date === today);
   const jobsFound = todayMatches.length;
   // Ready resumes stay useful across days — count (and filter) all of them,
   // not just today's.
-  const readyMatches = allJobs
+  const readyMatches = visibleJobs
     .filter((m) => m.pdf_url)
     .sort((a, b) => (b.match_score || 0) - (a.match_score || 0));
   const resumesReady = readyMatches.length;
@@ -1171,7 +1197,7 @@ function DashboardContent() {
   // the 5 most recent dates to keep the page light. Same JobCard as today
   // (feedback/apply/retry are per-match, so they all keep working).
   const historyByDate = new Map<string, UserJob[]>();
-  for (const j of allJobs) {
+  for (const j of visibleJobs) {
     if (!j.digest_date || j.digest_date === today) continue;
     const list = historyByDate.get(j.digest_date) || [];
     list.push(j);
@@ -1272,6 +1298,43 @@ function DashboardContent() {
           <DigestTimePicker userId={user.id} token={token} currentTime={user.preferred_digest_time} />
         </div>
 
+        {/* One-time location filter — narrows the view only, never the
+            saved preferences. Options come from the loaded jobs, so it
+            only appears once there's something to filter. */}
+        {(locationOptions.length > 0 || hasRemote) && allJobs.length > 1 && (
+          <div className="flex flex-wrap items-center gap-2 mb-6 animate-fade-in">
+            <MapPin size={16} strokeWidth={1.75} style={{ color: "var(--text-muted)" }} />
+            <select
+              value={locationFilter}
+              onChange={(e) => setLocationFilter(e.target.value)}
+              className="px-3 py-2 rounded-md text-sm"
+              style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)" }}
+              aria-label="Filter matches by location"
+            >
+              <option value="">All locations</option>
+              {hasRemote && <option value="__remote__">Remote</option>}
+              {locationOptions.map((loc) => (
+                <option key={loc} value={loc}>{loc}</option>
+              ))}
+            </select>
+            {locationFilter && (
+              <button
+                type="button"
+                onClick={() => setLocationFilter("")}
+                className="text-sm font-medium hover:underline"
+                style={{ color: "var(--primary)" }}
+              >
+                Clear
+              </button>
+            )}
+            {locationFilter && (
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                Showing {visibleJobs.length} of {allJobs.length} matches
+              </span>
+            )}
+          </div>
+        )}
+
         {showOnlyReady ? (
           <>
             {/* Filtered view: only matches with a finished tailored resume */}
@@ -1312,6 +1375,12 @@ function DashboardContent() {
                   </button>
                 )}
               </div>
+            ) : locationFilter ? (
+              // Filter emptied the list — say so instead of implying no
+              // matches exist at all.
+              <p className="text-sm mb-2" style={{ color: "var(--text-muted)" }}>
+                No matches for this location today — clear the filter to see everything.
+              </p>
             ) : historyDates.length > 0 ? (
               // No new matches today but there's history below — a slim note
               // beats a big empty card that pushes real content off-screen.

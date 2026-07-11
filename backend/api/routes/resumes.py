@@ -19,6 +19,7 @@ from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from core.config import get_settings
@@ -37,7 +38,7 @@ settings = get_settings()
 router = APIRouter()
 
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5MB
-RESUME_TEMPLATES = {"modern", "classic", "minimal"}  # backend/templates/resume_<name>.html
+RESUME_TEMPLATES = {"professional", "modern", "classic", "minimal"}  # backend/templates/resume_<name>.html
 _CONTENT_TYPES = {
     "pdf": "application/pdf",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -83,6 +84,24 @@ class Links(BaseModel):
     linkedin: str = ""
     portfolio: str = ""
     github: str = ""
+
+
+class ResumePreviewRequest(BaseModel):
+    """Same shape as ConfirmProfileRequest's resume-relevant fields, but
+    every field is optional — this fires while someone is still mid-edit
+    in onboarding, well before the "email is required" bar a real
+    account save enforces."""
+    basic_info: dict = Field(default_factory=dict)  # full_name/location — no validation, just .get()'d
+    summary: str = ""
+    work_experience: list[ExperienceEntry] = Field(default_factory=list)
+    projects: list[ProjectEntry] = Field(default_factory=list)
+    education: list[EducationEntry] = Field(default_factory=list)
+    target_roles: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
+    links: Links = Field(default_factory=Links)
+    job_category: str = ""
+    template_name: str = "professional"
 
 
 class BasicInfo(BaseModel):
@@ -294,6 +313,43 @@ async def get_parse_status(job_id: str):
     return resp.data[0]
 
 
+@router.post("/preview")
+async def preview_resume(payload: ResumePreviewRequest, request: Request):
+    """
+    "See what this looks like" for the template picker — fires while
+    someone is still mid-edit in onboarding, before there's an account to
+    attach a token to, so this is intentionally unauthenticated. Returns
+    raw HTML (not a PDF): render_resume_html is a pure function with no
+    Supabase/Chromium involved, so this is fast enough to call on every
+    template switch; a real Playwright PDF render only ever happens for
+    a confirmed, matched job (core/pdf_generator.generate_pdf_for_match).
+    """
+    client_ip = _client_ip(request)
+    if not check_budget(f"resume_preview_ip_{client_ip}", settings.resume_preview_daily_limit_per_ip):
+        raise HTTPException(429, "Too many preview requests today. Please try again tomorrow.")
+
+    template_name = payload.template_name if payload.template_name in RESUME_TEMPLATES else "professional"
+
+    resume_text = build_resume_text_from_profile(payload.model_dump())
+    basic = payload.basic_info or {}
+
+    from core.pdf_generator import render_resume_html
+    html = render_resume_html(
+        user_name=basic.get("full_name") or "Your Name",
+        user_email=basic.get("email") or "",
+        job_title="",
+        company="",
+        resume_text=resume_text,
+        template_name=template_name,
+        target_role=(payload.target_roles[0] if payload.target_roles else payload.job_category.replace("_", " ").title()),
+        user_location=basic.get("location") or "",
+        linkedin_url=payload.links.linkedin,
+        portfolio_url=payload.links.portfolio,
+        github_url=payload.links.github,
+    )
+    return HTMLResponse(html)
+
+
 async def _match_new_user(user_id: str) -> None:
     """
     Instant first match — a core journey step (docs/PRODUCT_STRATEGY_BETA.md):
@@ -415,7 +471,7 @@ async def confirm_profile(payload: ConfirmProfileRequest, request: Request, back
         "resume_file_path": payload.resume_file_path,
         # Unknown/blank template names silently fall back to the default —
         # a bad value here must never block someone from saving a profile.
-        "resume_template": payload.resume_template if payload.resume_template in RESUME_TEMPLATES else "modern",
+        "resume_template": payload.resume_template if payload.resume_template in RESUME_TEMPLATES else "professional",
         "linkedin_url": payload.links.linkedin or None,
         "portfolio_url": payload.links.portfolio or None,
         "github_url": payload.links.github or None,

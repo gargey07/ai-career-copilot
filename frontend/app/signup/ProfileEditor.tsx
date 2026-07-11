@@ -398,6 +398,7 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
         <TemplatePicker
           value={profile.resume_template || "professional"}
           onChange={(v) => update("resume_template", v)}
+          profile={profile}
         />
       </SectionCard>
 

@@ -142,6 +142,10 @@ class Settings(BaseSettings):
     # provider budget by hammering Generate.
     on_demand_resume_bonus_per_day: int = 2      # extra resumes beyond the pipeline quota
     cover_letters_per_user_daily: int = 3
+    # Resume style preview (POST /api/resumes/preview) — no AI/Chromium
+    # involved, cheap, but unauthenticated (fires pre-account during
+    # onboarding), so still worth a sane per-IP daily ceiling.
+    resume_preview_daily_limit_per_ip: int = 200
 
     # Shared secret to authorize the manual pipeline trigger (POST /api/admin/run-pipeline).
     # Empty = trigger disabled (safe default). Set ADMIN_TOKEN on the server to enable.

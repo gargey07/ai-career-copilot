@@ -25,6 +25,38 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+# ── Required-experience extraction ────────────────────────────────────────────
+# "N years"/"N+ years"/"N-M years" mentions. The surrounding-context check
+# below is what makes this safe to run on whole descriptions: "2+ years of
+# experience" counts, "founded 25 years ago" does not.
+_YEARS_RE = re.compile(r"(\d{1,2})\s*(?:\+|\s*(?:-|–|to)\s*\d{1,2})?\s*(?:years?|yrs?)\b", re.IGNORECASE)
+_EXPERIENCE_CONTEXT_RE = re.compile(r"\bexp(?:erience|\b|\.)", re.IGNORECASE)
+_EXPERIENCE_CONTEXT_WINDOW = 60  # chars each side of a "N years" hit
+_MAX_PLAUSIBLE_YEARS = 40
+
+
+def experience_months_from_text(text: str) -> Optional[int]:
+    """
+    Minimum required experience (in months) stated in a job description,
+    or None when nothing credible is found. Takes the LOWEST qualifying
+    number — "2-4 years" and "2+ years" both mean a 2-year floor. Only
+    counts a "N years" mention with the word "experience" nearby, so
+    marketing copy ("serving clients for 15 years") doesn't poison it.
+    """
+    if not text:
+        return None
+    years_found: list[int] = []
+    for m in _YEARS_RE.finditer(text):
+        years = int(m.group(1))
+        if years == 0 or years > _MAX_PLAUSIBLE_YEARS:
+            continue
+        start = max(0, m.start() - _EXPERIENCE_CONTEXT_WINDOW)
+        end = min(len(text), m.end() + _EXPERIENCE_CONTEXT_WINDOW)
+        if _EXPERIENCE_CONTEXT_RE.search(text[start:end]):
+            years_found.append(years)
+    return min(years_found) * 12 if years_found else None
+
+
 # ── Normalized Job Schema ─────────────────────────────────────────────────────
 def normalize_job(
     source: str,
@@ -40,8 +72,16 @@ def normalize_job(
     seniority_level: Optional[str] = None,
     is_remote: bool = False,
     posted_at: Optional[str] = None,
+    required_experience_months: Optional[int] = None,
 ) -> dict:
-    """Normalize any job from any source into a common schema."""
+    """Normalize any job from any source into a common schema.
+
+    required_experience_months: structured value when the source provides
+    one (only JSearch does); otherwise parsed from the description here so
+    every source gets the same treatment. None means "unknown" — the
+    matcher treats that as unfilterable, never as "no requirement"."""
+    if required_experience_months is None:
+        required_experience_months = experience_months_from_text(description or "")
     return {
         "source": source,
         "external_id": str(external_id),
@@ -55,6 +95,7 @@ def normalize_job(
         "employment_type": employment_type,
         "seniority_level": seniority_level,
         "is_remote": is_remote,
+        "required_experience_months": required_experience_months,
         "posted_at": posted_at,
         "collected_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -204,6 +245,14 @@ class JSearchFetcher:
                             "mid"
                         )
                         apply_url = job.get("job_apply_link") or job.get("job_url") or ""
+                        # JSearch is the one source with a structured
+                        # experience field — prefer it over description
+                        # parsing when present and positive.
+                        req_exp = (job.get("job_required_experience") or {}).get("required_experience_in_months")
+                        try:
+                            req_exp = int(req_exp) if req_exp else None
+                        except (TypeError, ValueError):
+                            req_exp = None
                         jobs.append(normalize_job(
                             source="jsearch",
                             external_id=job.get("job_id", ""),
@@ -218,6 +267,7 @@ class JSearchFetcher:
                             seniority_level=seniority,
                             is_remote=job.get("job_is_remote", False),
                             posted_at=job.get("job_posted_at_datetime_utc"),
+                            required_experience_months=req_exp,
                         ))
                     logger.info(f"JSearch page {page}: {len(data.get('data', []))} jobs")
                 except Exception as e:
@@ -366,6 +416,14 @@ class JobicyFetcher:
 
 
 # ── Deduplication & Storage ───────────────────────────────────────────────────
+# Columns added after launch — a database that hasn't run their migration
+# yet must not lose every fetched job over one of them. Newest first, so
+# the retry loop peels them off in reverse-migration order. Matching
+# degrades gracefully on rows missing either (text fallback / "unknown
+# experience" respectively).
+_OPTIONAL_JOB_COLUMNS = ("required_experience_months", "search_category")
+
+
 async def store_jobs(jobs: list[dict]) -> int:
     """
     Upsert jobs into the central jobs table.
@@ -376,38 +434,30 @@ async def store_jobs(jobs: list[dict]) -> int:
         return 0
 
     supabase = get_supabase()
-    try:
-        response = (
-            supabase.table("jobs")
-            .upsert(jobs, on_conflict="source_url", ignore_duplicates=True)
-            .execute()
-        )
-        count = len(response.data) if response.data else 0
-        logger.info(f"✅ Stored {count} new jobs (out of {len(jobs)} fetched)")
-        return count
-    except Exception as e:
-        # search_category is a newer column (core/matcher.py's category
-        # gate) — a database that hasn't run the migration yet must not
-        # lose every fetched job over it. Strip the key and retry once
-        # rather than raising outright; matcher.py's text-based fallback
-        # still works fine on untagged rows.
-        if any("search_category" in j for j in jobs):
-            logger.warning(f"⚠️  Upsert with search_category failed ({e}) — retrying without it.")
-            stripped = [{k: v for k, v in j.items() if k != "search_category"} for j in jobs]
-            try:
-                response = (
-                    supabase.table("jobs")
-                    .upsert(stripped, on_conflict="source_url", ignore_duplicates=True)
-                    .execute()
-                )
-                count = len(response.data) if response.data else 0
-                logger.info(f"✅ Stored {count} new jobs without search_category (out of {len(jobs)} fetched)")
-                return count
-            except Exception as e2:
-                logger.error(f"❌ Failed to store jobs even without search_category: {e2}")
+    attempt_jobs = jobs
+    stripped: list[str] = []
+    to_strip = list(_OPTIONAL_JOB_COLUMNS)
+    while True:
+        try:
+            response = (
+                supabase.table("jobs")
+                .upsert(attempt_jobs, on_conflict="source_url", ignore_duplicates=True)
+                .execute()
+            )
+            count = len(response.data) if response.data else 0
+            suffix = f" (without {', '.join(stripped)})" if stripped else ""
+            logger.info(f"✅ Stored {count} new jobs{suffix} (out of {len(jobs)} fetched)")
+            return count
+        except Exception as e:
+            # Peel off the next optional column actually present and retry.
+            col = next((c for c in to_strip if any(c in j for j in attempt_jobs)), None)
+            if col is None:
+                logger.error(f"❌ Failed to store jobs: {e}")
                 raise
-        logger.error(f"❌ Failed to store jobs: {e}")
-        raise
+            to_strip.remove(col)
+            stripped.append(col)
+            logger.warning(f"⚠️  Upsert failed ({e}) — retrying without '{col}'.")
+            attempt_jobs = [{k: v for k, v in j.items() if k != col} for j in attempt_jobs]
 
 
 # ── Main Runner ───────────────────────────────────────────────────────────────

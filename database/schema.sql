@@ -392,6 +392,16 @@ ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS match_breakdown JSONB;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS override_expires_at TIMESTAMPTZ;
 -- ── End job-seeker sprint block ────────────────────────────────────────────
 
+-- ── Match-quality sprint (2026-07-11) ───────────────────────────────────────
+-- Minimum experience a job asks for, in months (TICKET-031). From JSearch's
+-- structured job_required_experience field when present, else parsed from
+-- the description ("2+ years experience" -> 24). NULL = unknown — the
+-- matcher treats unknown as unfilterable, NOT as "no requirement". Existing
+-- rows stay NULL until re-fetched; core/matcher.py falls back to
+-- seniority_level band comparison for those.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS required_experience_months INTEGER;
+-- ── End match-quality sprint block ──────────────────────────────────────────
+
 -- Admin audit trail (T-016) — every sensitive admin action: inspect views,
 -- signed resume-URL issuance, quota changes, deletions, pipeline triggers.
 -- Single shared ADMIN_TOKEN today, so no admin identity column yet; the

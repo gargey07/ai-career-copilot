@@ -125,6 +125,92 @@ def _category_relevant(job: dict, user_categories: set[str], category_terms: set
     return len(category_terms & desc_words) >= 2
 
 
+# ── Experience-level gate (TICKET-031) ────────────────────────────────────────
+# Two vocabularies live side by side: users pick fresher/junior/mid/senior
+# at signup (ProfileEditor.tsx), while jobs carry entry/mid/senior/lead
+# (JSearch title inference). Both map onto the same band scale here.
+#
+# Top of each user band in months — a job requiring more than this plus
+# the tolerance is hard-excluded. None = no upper cap (senior users are
+# never priced out upward).
+_USER_BAND_TOP_MONTHS: dict[str, int | None] = {
+    "fresher": 12, "entry": 12,
+    "junior": 36,
+    "mid": 60,
+    "senior": None, "lead": None,
+}
+# A fresher can reasonably stretch to a "1-2 years" job; never to "5+".
+_EXPERIENCE_TOLERANCE_MONTHS = 12
+
+# Band indices for the coarse fallback when a job has no months data —
+# only the title-inferred seniority_level. User side:
+_USER_BAND_INDEX = {"fresher": 0, "entry": 0, "junior": 0, "mid": 1, "senior": 2, "lead": 2}
+# Job side ("lead" sits above "senior" so mid users don't get lead roles):
+_JOB_BAND_INDEX = {"entry": 0, "junior": 0, "fresher": 0, "mid": 1, "senior": 2, "lead": 3}
+
+# Senior users seeing entry-level jobs: allowed (their call) but nudged
+# down so their digest leads with band-appropriate roles.
+_EXPERIENCE_DOWNLEVEL_PENALTY = 0.9
+
+
+def _job_band_index(job: dict) -> int | None:
+    """Coarse band for a job: months when known, else title-inferred
+    seniority_level, else None (unknown)."""
+    months = job.get("required_experience_months")
+    if isinstance(months, (int, float)) and months > 0:
+        return 0 if months < 36 else (1 if months < 60 else 2)
+    return _JOB_BAND_INDEX.get((job.get("seniority_level") or "").strip().lower())
+
+
+def _experience_ok(job: dict, user_level: str) -> bool:
+    """
+    Hard gate: False only when the job demonstrably asks for more
+    experience than the user's band can stretch to. Unknown data (no
+    months, no seniority) passes — unknown is not disqualified — and
+    users with no/unrecognized level are never filtered.
+    """
+    level = (user_level or "").strip().lower()
+    if level not in _USER_BAND_TOP_MONTHS:
+        return True
+    top = _USER_BAND_TOP_MONTHS[level]
+    if top is None:
+        return True  # senior/lead users: no upward exclusion possible
+    months = job.get("required_experience_months")
+    if isinstance(months, (int, float)) and months > 0:
+        return months <= top + _EXPERIENCE_TOLERANCE_MONTHS
+    job_idx = _JOB_BAND_INDEX.get((job.get("seniority_level") or "").strip().lower())
+    if job_idx is None:
+        return True
+    return job_idx - _USER_BAND_INDEX[level] < 2
+
+
+def _apply_experience_penalty(jobs: list[dict], user_level: str) -> list[dict]:
+    """Post-scoring nudge: a job 2+ bands BELOW the user gets its score
+    multiplied down (never dropped — a senior may genuinely want it)."""
+    user_idx = _USER_BAND_INDEX.get((user_level or "").strip().lower())
+    if not user_idx:  # unknown level or already the bottom band
+        return jobs
+    for j in jobs:
+        job_idx = _job_band_index(j)
+        if job_idx is not None and user_idx - min(job_idx, 2) >= 2:
+            j["match_score"] = round((j.get("match_score") or 0) * _EXPERIENCE_DOWNLEVEL_PENALTY, 4)
+    return jobs
+
+
+def _experience_fit_label(job: dict, user_level: str) -> str | None:
+    """'match' / 'stretch' / 'below' for the honest breakdown — None when
+    the job has no experience data or the user level is unknown (the
+    breakdown only ever carries actually-computed facts)."""
+    user_idx = _USER_BAND_INDEX.get((user_level or "").strip().lower())
+    job_idx = _job_band_index(job)
+    if user_idx is None or job_idx is None:
+        return None
+    job_idx = min(job_idx, 2)
+    if job_idx == user_idx:
+        return "match"
+    return "stretch" if job_idx > user_idx else "below"
+
+
 # Even a category-relevant keyword match can be pure noise (one incidental
 # term overlap) — this is the formula's floor for hits >= 1, so 0.55
 # meaningfully drops the weakest matches instead of padding the digest
@@ -305,30 +391,53 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
         jobs = matched.data or []
         if jobs:
             # The match_jobs SQL function's fixed column list doesn't
-            # include search_category, so a high cosine-similarity score
-            # alone can still be the wrong profession entirely (e.g. a
-            # UI/UX Designer job scoring 74% for a Fullstack Developer).
-            # Batch-fetch the tag for these candidates and filter by it.
+            # include search_category or the experience columns, so a high
+            # cosine-similarity score alone can still be the wrong
+            # profession entirely — or a 5-year role shown to a fresher
+            # (embeddings can't compare numbers). Batch-fetch those
+            # columns for these candidates and gate on them.
             user_categories = _user_categories(user)
             category_terms = _category_terms(user)
+            user_level = user.get("experience_level") or ""
             job_ids = [j["id"] for j in jobs if j.get("id")]
-            cat_by_id: dict[str, str | None] = {}
+            meta_by_id: dict[str, dict] | None = {}
             if job_ids:
                 try:
-                    cat_resp = supabase.table("jobs").select("id, search_category").in_("id", job_ids).execute()
-                    cat_by_id = {row["id"]: row.get("search_category") for row in (cat_resp.data or [])}
+                    meta_resp = (
+                        supabase.table("jobs")
+                        .select("id, search_category, seniority_level, required_experience_months")
+                        .in_("id", job_ids)
+                        .execute()
+                    )
+                    meta_by_id = {row["id"]: row for row in (meta_resp.data or [])}
                 except Exception as e:
-                    logger.warning(f"   Couldn't load search_category for candidates ({e}) — skipping category filter this run.")
-                    cat_by_id = None  # signals "don't filter" below
+                    # required_experience_months is the newest column — an
+                    # unmigrated DB shouldn't lose category filtering too.
+                    try:
+                        cat_resp = supabase.table("jobs").select("id, search_category").in_("id", job_ids).execute()
+                        meta_by_id = {row["id"]: row for row in (cat_resp.data or [])}
+                    except Exception:
+                        logger.warning(f"   Couldn't load candidate metadata ({e}) — skipping category/experience filters this run.")
+                        meta_by_id = None  # signals "don't filter" below
 
-            if cat_by_id is not None:
+            if meta_by_id is not None:
                 for j in jobs:
-                    j["search_category"] = cat_by_id.get(j.get("id"))
-                relevant = [j for j in jobs if _category_relevant(j, user_categories, category_terms)]
+                    meta = meta_by_id.get(j.get("id")) or {}
+                    j["search_category"] = meta.get("search_category")
+                    j["seniority_level"] = meta.get("seniority_level")
+                    j["required_experience_months"] = meta.get("required_experience_months")
+                relevant = [
+                    j for j in jobs
+                    if _category_relevant(j, user_categories, category_terms) and _experience_ok(j, user_level)
+                ]
+                no_exp_data = sum(1 for j in relevant if _job_band_index(j) is None)
+                if no_exp_data:
+                    logger.info(f"   {no_exp_data}/{len(relevant)} vector candidates have no experience data (passed unfiltered)")
             else:
                 relevant = jobs
 
             relevant = _apply_relevance_penalties(relevant, penalties)
+            relevant = _apply_experience_penalty(relevant, user_level)
             relevant.sort(key=lambda j: j.get("match_score") or 0, reverse=True)
 
             if relevant:
@@ -379,6 +488,11 @@ def _build_breakdown(user: dict, job: dict, source: str) -> dict:
     if source == "vector":
         score = job.get("match_score") or 0
         breakdown["similarity"] = round(score / 100.0 if score > 1 else score, 4)
+    # Only when the job actually carries experience data AND the user has
+    # a recognized level — never an invented value.
+    fit = _experience_fit_label(job, user.get("experience_level") or "")
+    if fit:
+        breakdown["experience_fit"] = fit
     return breakdown
 
 
@@ -403,7 +517,15 @@ def keyword_match(
     seen = seen or {}
     penalties = penalties or {"exclude_companies": set(), "demote_title_tokens": set()}
     user_categories = _user_categories(user)
-    candidates = [j for j in jobs if _category_relevant(j, user_categories, _category_terms(user))]
+    user_level = user.get("experience_level") or ""
+    category_terms = _category_terms(user)
+    candidates = [
+        j for j in jobs
+        if _category_relevant(j, user_categories, category_terms) and _experience_ok(j, user_level)
+    ]
+    no_exp_data = sum(1 for j in candidates if _job_band_index(j) is None)
+    if no_exp_data:
+        logger.info(f"   {no_exp_data}/{len(candidates)} keyword candidates have no experience data (passed unfiltered)")
     # Excluded companies are dropped before scoring (a hard "never again");
     # wrong-role title demotion must wait until AFTER scoring — it works by
     # multiplying match_score, which doesn't exist yet on raw candidates.
@@ -435,6 +557,7 @@ def keyword_match(
     # a demoted lookalike dropping below MIN_KEYWORD_SCORE is the intended
     # outcome, not a survivor with a small number.
     scored = _apply_relevance_penalties(scored, penalties)
+    scored = _apply_experience_penalty(scored, user_level)
     scored = [j for j in scored if j["match_score"] >= MIN_KEYWORD_SCORE]
 
     scored.sort(key=lambda j: j["match_score"], reverse=True)

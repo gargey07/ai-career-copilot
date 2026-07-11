@@ -67,3 +67,29 @@ def check_budget(service: str, daily_limit: int, amount: int = 1) -> bool:
         # whole pipeline. Worst case we occasionally under-count by a call.
         logger.warning(f"⚠️  Usage guard check failed for '{service}' ({e}) — allowing call.")
         return True
+
+
+def record_usage_event(service: str, amount: int = 1) -> None:
+    """
+    Unconditional counter bump — no budget semantics, never blocks, never
+    raises. Used for diagnostics counters like '{provider}_fail' so the
+    admin usage screen can show WHY a provider is being skipped (core/ai.py
+    waterfall) without anyone needing server log access.
+    """
+    today = date.today().isoformat()
+    try:
+        supabase = get_supabase()
+        resp = (
+            supabase.table("api_usage")
+            .select("count")
+            .eq("service", service)
+            .eq("usage_date", today)
+            .execute()
+        )
+        current = resp.data[0]["count"] if resp.data else 0
+        supabase.table("api_usage").upsert(
+            {"service": service, "usage_date": today, "count": current + amount},
+            on_conflict="service,usage_date",
+        ).execute()
+    except Exception as e:
+        logger.debug(f"Usage event '{service}' not recorded ({e}) — diagnostics only, ignoring.")

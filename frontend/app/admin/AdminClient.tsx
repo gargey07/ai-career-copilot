@@ -31,6 +31,7 @@ interface ApiUsageRow {
   label: string;
   limit: number; // 0 = uncapped
   used: number;
+  failed?: number; // AI-waterfall failure count for this provider today
 }
 interface AdminUserRow {
   id: string;
@@ -346,6 +347,9 @@ function UsageBar({ row }: { row: ApiUsageRow }) {
         <span className="text-sm font-medium" style={{ color: "var(--text)" }}>{row.label}</span>
         <span className="text-xs tabular-nums" style={{ color: "var(--text-muted)" }}>
           {capped ? `${row.used} / ${row.limit} today` : `${row.used} today · no cap`}
+          {(row.failed ?? 0) > 0 && (
+            <span style={{ color: "var(--coral)" }}>{` · ${row.failed} failed`}</span>
+          )}
         </span>
       </div>
       <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--surface-muted)" }}>

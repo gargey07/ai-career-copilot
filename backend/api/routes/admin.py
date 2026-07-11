@@ -292,8 +292,15 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
             used[row["service"]] = row.get("count") or 0
     used["resume_parse"] = resume_parse_total
 
+    # `failed` = the waterfall's '{provider}_fail' diagnostic bucket
+    # (core/ai.py) — Gemini's generation budget bucket is 'gemini_generate'
+    # but its provider name (hence fail bucket) is plain 'gemini'.
     api_usage = [
-        {**svc, "used": used.get(svc["service"], 0)}
+        {
+            **svc,
+            "used": used.get(svc["service"], 0),
+            "failed": used.get(f"{svc['service'].removesuffix('_generate')}_fail", 0),
+        }
         for svc in _usage_services()
     ]
 

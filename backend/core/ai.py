@@ -19,7 +19,7 @@ from typing import Optional
 import google.generativeai as genai
 
 from core.config import get_settings
-from core.usage_guard import check_budget, BudgetExceededError
+from core.usage_guard import check_budget, record_usage_event, BudgetExceededError
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -58,6 +58,7 @@ class GeminiProvider(AIProvider):
 
     def __init__(self):
         genai.configure(api_key=settings.gemini_api_key)
+        self.name = "gemini"  # waterfall log lines + '{name}_fail' usage bucket
         self.model = genai.GenerativeModel("gemini-2.5-flash")
         self.embed_model = "models/gemini-embedding-001"
         logger.info("✅ Gemini AI provider initialized (gemini-2.5-flash)")
@@ -120,6 +121,7 @@ class OpenAIProvider(AIProvider):
         # only adds latency without adding a real chance of success — Gemini's
         # 20/day quota or another provider's rate limit doesn't clear in 30s.
         self.client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=_PROVIDER_TIMEOUT_SECONDS, max_retries=0)
+        self.name = "openai"  # waterfall log lines + '{name}_fail' usage bucket
         logger.info("✅ OpenAI provider initialized")
 
     async def generate_text(self, prompt: str, temperature: float = 0.3) -> str:
@@ -232,7 +234,11 @@ class WaterfallAIProvider(AIProvider):
                 return await provider.generate_text(prompt, temperature)
             except Exception as e:
                 name = getattr(provider, "name", type(provider).__name__)
-                logger.warning(f"⚠️  {name} failed ({e}) — trying next provider in the waterfall")
+                # Exception class distinguishes 401 vs 429 vs timeout in the
+                # log; the _fail counter surfaces the same fact on the admin
+                # usage screen so diagnosing this never requires log access.
+                logger.warning(f"⚠️  {name} failed ({type(e).__name__}: {e}) — trying next provider in the waterfall")
+                record_usage_event(f"{name}_fail")
                 last_error = e
         raise last_error or RuntimeError("All AI providers in the waterfall failed")
 

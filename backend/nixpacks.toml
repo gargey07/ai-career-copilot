@@ -1,0 +1,21 @@
+# Coolify builds this app with Nixpacks — this file layers system packages
+# into the generated image. WeasyPrint (PDF_ENGINE=weasyprint, see
+# core/pdf_generator.py) needs pango/cairo at import time; without them the
+# only PDF path was Playwright Chromium, whose ~40 shared-library deps are
+# NOT in Nixpacks' python image either (that's exactly how PDF generation
+# broke after the VPS migration: the libs had been installed manually
+# inside a running container and every redeploy erased them).
+#
+# Chromium's dependency list is deliberately NOT baked in — chromium remains
+# the local/dev engine; the server runs WeasyPrint. fonts-dejavu-core gives
+# text rendering a sane default font.
+[phases.setup]
+aptPkgs = [
+  "libpango-1.0-0",
+  "libpangoft2-1.0-0",
+  "libpangocairo-1.0-0",
+  "libcairo2",
+  "libgdk-pixbuf-2.0-0",
+  "shared-mime-info",
+  "fonts-dejavu-core",
+]

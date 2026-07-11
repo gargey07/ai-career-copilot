@@ -404,8 +404,22 @@ async def render_pdf(html_content: str, output_path: str) -> int:
     if settings.pdf_engine.lower() == "weasyprint":
         try:
             return await html_to_pdf_weasyprint(html_content, output_path)
-        except Exception as e:
-            logger.warning(f"⚠️  weasyprint render failed ({type(e).__name__}: {e}) — falling back to chromium for this PDF")
+        except Exception as weasy_err:
+            logger.warning(f"⚠️  weasyprint render failed ({type(weasy_err).__name__}: {weasy_err}) — falling back to chromium for this PDF")
+            try:
+                return await html_to_pdf(html_content, output_path)
+            except Exception as chromium_err:
+                # Both engines failed — the weasyprint error is usually the
+                # actually-informative one (a real render bug), while
+                # chromium's is almost always the SAME generic "missing
+                # system libs" message every time on this host (its libs
+                # were deliberately not baked into the build). Surfacing
+                # only chromium's message in pdf_error_message would hide
+                # the real cause behind a already-known, unhelpful one.
+                raise RuntimeError(
+                    f"weasyprint: {type(weasy_err).__name__}: {weasy_err} | "
+                    f"chromium fallback also failed: {type(chromium_err).__name__}: {chromium_err}"
+                ) from chromium_err
     return await html_to_pdf(html_content, output_path)
 
 

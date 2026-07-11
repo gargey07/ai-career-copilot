@@ -32,6 +32,7 @@ interface ApiUsageRow {
   limit: number; // 0 = uncapped
   used: number;
   failed?: number; // AI-waterfall failure count for this provider today
+  key_configured?: boolean; // present only for key-gated services — omitted means "not applicable"
 }
 interface AdminUserRow {
   id: string;
@@ -337,10 +338,84 @@ function FunnelBar({ funnel }: { funnel: Funnel }) {
   );
 }
 
+// ── PDF failures — the diagnostic behind every "resume shows Retry, does
+// nothing" report. Lazy-loaded on demand (not part of the overview) since
+// it's an occasional debugging tool, not something needed on every load.
+interface PdfFailureRow {
+  match_id: string;
+  user_id: string;
+  user_name: string | null;
+  user_email: string | null;
+  error: string | null;
+  updated_at: string | null;
+}
+
+function PdfFailuresPanel({ token }: { token: string }) {
+  const [rows, setRows] = useState<PdfFailureRow[] | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/admin/pdf-failures?token=${encodeURIComponent(token)}`);
+      const data = await res.json();
+      setRows(res.ok ? data.failures : []);
+    } catch {
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <SectionCard
+      icon={AlertTriangle}
+      title="Recent PDF failures"
+      action={
+        <Button variant="secondary" onClick={load} disabled={loading}>
+          <RefreshCw size={15} strokeWidth={1.75} className={loading ? "animate-spin" : ""} />
+          {loading ? "Checking…" : rows === null ? "Check now" : "Refresh"}
+        </Button>
+      }
+    >
+      {rows === null ? (
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          Click &quot;Check now&quot; to pull the most recent pdf_failed matches and their stored error text —
+          the exact reason resumes are stuck, no Supabase access needed.
+        </p>
+      ) : rows.length === 0 ? (
+        <EmptyState icon={FileText} title="No recent PDF failures" description="Every recent resume rendered successfully." />
+      ) : (
+        <div className="space-y-3">
+          {rows.map((r) => (
+            <div key={r.match_id} className="p-3 rounded-md" style={{ background: "var(--surface-muted)" }}>
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-sm font-medium" style={{ color: "var(--text)" }}>
+                  {r.user_name || r.user_email || r.user_id}
+                </span>
+                <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  {r.updated_at ? new Date(r.updated_at).toLocaleString("en-IN") : ""}
+                </span>
+              </div>
+              <p className="text-xs mt-1 font-mono break-words" style={{ color: "var(--coral)" }}>
+                {r.error || "(no error text stored)"}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
 function UsageBar({ row }: { row: ApiUsageRow }) {
   const capped = row.limit > 0;
   const pct = capped ? Math.min(100, Math.round((row.used / row.limit) * 100)) : 0;
   const barColor = pct >= 90 ? "var(--coral)" : pct >= 70 ? "var(--accent)" : "var(--success)";
+  // A flat 0 usage with no failures is ambiguous — "not needed yet" and
+  // "key missing" look identical. Only worth flagging when it's actually
+  // suspicious: zero usage, key-gated, and the key genuinely isn't set.
+  const keyMissing = row.key_configured === false && row.used === 0;
   return (
     <div>
       <div className="flex items-baseline justify-between mb-1.5">
@@ -350,6 +425,7 @@ function UsageBar({ row }: { row: ApiUsageRow }) {
           {(row.failed ?? 0) > 0 && (
             <span style={{ color: "var(--coral)" }}>{` · ${row.failed} failed`}</span>
           )}
+          {keyMissing && <span style={{ color: "var(--coral)" }}>{" · no API key set"}</span>}
         </span>
       </div>
       <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--surface-muted)" }}>
@@ -540,6 +616,8 @@ export default function AdminClient() {
                 </p>
               )}
             </SectionCard>
+
+            <PdfFailuresPanel token={token} />
 
             {/* Users */}
             <SectionCard icon={Users} title="Users">

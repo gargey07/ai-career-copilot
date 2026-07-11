@@ -217,6 +217,41 @@ async def update_overrides(user_id: str, payload: OverridesUpdate, token: str = 
     return {"status": "ok", **update}
 
 
+# ── PDF failures — the diagnostic every "every resume shows Retry" report needs ──
+@router.get("/pdf-failures")
+async def recent_pdf_failures(token: str = Query(..., description="Admin token"), limit: int = Query(10, le=50)):
+    """
+    Most recent pdf_failed matches with their stored error text — the exact
+    SQL query ('select ... from user_jobs where status=pdf_failed order by
+    updated_at desc') as an endpoint, so diagnosing a PDF-render outage
+    never requires direct Supabase access."""
+    _require_admin(token)
+    supabase = get_supabase()
+    resp = (
+        supabase.table("user_jobs")
+        .select("id, user_id, status, pdf_error_message, updated_at, users(name, email)")
+        .eq("status", "pdf_failed")
+        .order("updated_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    rows = resp.data or []
+    return {
+        "count": len(rows),
+        "failures": [
+            {
+                "match_id": r["id"],
+                "user_id": r["user_id"],
+                "user_name": (r.get("users") or {}).get("name"),
+                "user_email": (r.get("users") or {}).get("email"),
+                "error": r.get("pdf_error_message"),
+                "updated_at": r.get("updated_at"),
+            }
+            for r in rows
+        ],
+    }
+
+
 # ── Overview ──────────────────────────────────────────────────────────────────
 # Which api_usage services to surface, with their configured daily caps.
 # resume_parse rows are per-IP (resume_parse_ip_<addr>) and get summed.
@@ -239,6 +274,28 @@ def _usage_services() -> list[dict]:
         {"service": "gmail",           "label": "Gmail digests",          "limit": settings.gmail_daily_limit},
         {"service": "resume_parse",    "label": "Resume uploads (all users)", "limit": 0},  # per-IP cap, no global cap
     ]
+
+
+# service -> the Settings field that must be non-empty for it to actually
+# be in the AI waterfall / usable at all. A provider sitting at 0 usage is
+# either "not needed yet" or "key missing" — those look identical from the
+# usage number alone (a flat 0/500 with no failures either way), which is
+# exactly what made the Groq outage take a code trace to diagnose instead
+# of a glance at this screen. Services not in this map (e.g. resume_parse)
+# aren't key-gated, so they're just omitted — no True/False to show.
+_KEY_SETTINGS: dict[str, str] = {
+    "gemini_generate": "gemini_api_key",
+    "gemini_embed": "gemini_api_key",
+    "groq": "groq_api_key",
+    "openrouter": "openrouter_api_key",
+    "github_models": "github_models_token",
+    "mistral": "mistral_api_key",
+    "cohere": "cohere_api_key",
+    "adzuna": "adzuna_app_key",
+    "jsearch": "jsearch_api_key",
+    "openai": "openai_api_key",
+    "resend": "resend_api_key",
+}
 
 
 @router.get("/overview")
@@ -356,6 +413,11 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
             **svc,
             "used": used.get(svc["service"], 0),
             "failed": used.get(f"{svc['service'].removesuffix('_generate')}_fail", 0),
+            **(
+                {"key_configured": bool(getattr(settings, _KEY_SETTINGS[svc["service"]], ""))}
+                if svc["service"] in _KEY_SETTINGS
+                else {}
+            ),
         }
         for svc in _usage_services()
     ]

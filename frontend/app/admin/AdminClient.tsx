@@ -665,7 +665,16 @@ export default function AdminClient() {
                           </td>
                           <td className="px-2 py-2.5 text-xs" style={{ color: "var(--text-muted)" }}>{row.provider || "—"}</td>
                           <td className="px-2 py-2.5 text-xs" style={{ color: "var(--text-muted)" }}>
-                            {row.status === "sent" ? row.subject : row.error_message || "—"}
+                            <div>{row.subject || "—"}</div>
+                            {row.error_message && (
+                              <div
+                                className="mt-0.5"
+                                style={{ color: row.status === "sent" ? "var(--text-muted)" : "var(--coral)" }}
+                                title={row.status === "sent" ? "Provider's acceptance response — proves the message was actually accepted for delivery, not just that the API call didn't error" : "Failure detail"}
+                              >
+                                {row.error_message}
+                              </div>
+                            )}
                           </td>
                         </tr>
                       ))}

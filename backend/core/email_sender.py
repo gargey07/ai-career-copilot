@@ -219,24 +219,45 @@ def _build_gmail_message(
     return msg
 
 
+def _deliver_via_smtp(server: smtplib.SMTP, to_email: str, msg_str: str) -> str:
+    """
+    Sends via the low-level mail()/rcpt()/data() sequence instead of
+    sendmail() specifically to capture the server's final DATA response
+    (e.g. "250 2.0.0 OK  1720... - gsmtp") — sendmail() swallows this on
+    success, returning only an empty dict, so a "sent" email_logs row
+    proved the SMTP transaction completed but never proved Gmail actually
+    accepted the message for delivery rather than silently queuing it for
+    spam review. Raises on any non-2xx response, same as sendmail() would.
+    """
+    server.login(settings.gmail_user, settings.gmail_app_password)
+    server.mail(settings.gmail_user)
+    rcpt_code, rcpt_resp = server.rcpt(to_email)
+    if rcpt_code not in (250, 251):
+        raise smtplib.SMTPRecipientsRefused({to_email: (rcpt_code, rcpt_resp)})
+    data_code, data_resp = server.data(msg_str)
+    if data_code != 250:
+        raise smtplib.SMTPResponseException(data_code, data_resp)
+    resp_text = data_resp.decode(errors="replace") if isinstance(data_resp, bytes) else str(data_resp)
+    return f"{data_code} {resp_text}"
+
+
 def _send_via_gmail(
     to_email: str, subject: str, html: str, unsubscribe_url: str,
     attachments: list[tuple[str, bytes]],
-) -> None:
+) -> str:
     """
     Blocking SMTP send — call through asyncio.to_thread. Tries port 465
     (implicit TLS) first, then falls back to 587 (STARTTLS) before giving
     up: some hosts block 465 specifically (a common free-tier anti-spam
     measure) while leaving 587 open, which is otherwise indistinguishable
     from a generic transient network error at the _send_email retry layer.
+    Returns the server's final response text (see _deliver_via_smtp).
     """
-    msg = _build_gmail_message(to_email, subject, html, unsubscribe_url, attachments)
+    msg_str = _build_gmail_message(to_email, subject, html, unsubscribe_url, attachments).as_string()
 
     try:
         with _IPv4SMTPSSL("smtp.gmail.com", 465, timeout=20) as server:
-            server.login(settings.gmail_user, settings.gmail_app_password)
-            server.sendmail(settings.gmail_user, [to_email], msg.as_string())
-        return
+            return _deliver_via_smtp(server, to_email, msg_str)
     except Exception as e:
         logger.warning(f"   Gmail port 465 failed ({e}) — trying port 587 (STARTTLS)")
 
@@ -244,14 +265,15 @@ def _send_via_gmail(
         server.ehlo()
         server.starttls()
         server.ehlo()
-        server.login(settings.gmail_user, settings.gmail_app_password)
-        server.sendmail(settings.gmail_user, [to_email], msg.as_string())
+        return _deliver_via_smtp(server, to_email, msg_str)
 
 
 def _send_via_resend(
     to_email: str, subject: str, html: str, unsubscribe_url: str,
     attachments: list[tuple[str, bytes]],
-) -> None:
+) -> str:
+    """Returns a short acceptance detail (the Resend email id) for email_logs
+    visibility — mirrors _send_via_gmail's response-text capture."""
     import resend
 
     resend.api_key = settings.resend_api_key
@@ -286,13 +308,15 @@ def _send_via_resend(
             {"filename": name, "content": base64.b64encode(content).decode()}
             for name, content in attachments
         ]
-    resend.Emails.send(payload)
+    result = resend.Emails.send(payload)
+    email_id = (result or {}).get("id") if isinstance(result, dict) else getattr(result, "id", None)
+    return f"resend id={email_id}" if email_id else "resend accepted (no id in response)"
 
 
 async def _send_email(
     to_email: str, subject: str, html: str, unsubscribe_url: str,
     attachments: list[tuple[str, bytes]] | None = None,
-) -> str | None:
+) -> tuple[str, str] | None:
     """
     Try each configured provider in order until one succeeds — true
     failover, not "use Resend only if Gmail isn't configured" (the old
@@ -307,6 +331,12 @@ async def _send_email(
     silently and isn't itself a failure. Returns None only when nothing
     was configured or every configured provider is over budget (not an
     error — the caller doesn't log this to email_logs, same as before).
+
+    On success, returns (provider_name, detail) — `detail` is the
+    provider's own acceptance response (SMTP DATA response / Resend email
+    id), stored in email_logs so a "sent" row proves the message was
+    actually accepted for delivery, not just that the API call didn't
+    throw (see _deliver_via_smtp).
     """
     attachments = attachments or []
     attempted = False
@@ -317,9 +347,9 @@ async def _send_email(
             for attempt in range(2):
                 attempted = True
                 try:
-                    await asyncio.to_thread(_send_via_gmail, to_email, subject, html, unsubscribe_url, attachments)
+                    detail = await asyncio.to_thread(_send_via_gmail, to_email, subject, html, unsubscribe_url, attachments)
                     _record_gmail_result(None)
-                    return "gmail"
+                    return "gmail", detail
                 except Exception as e:
                     last_error = e
                     _record_gmail_result(e)
@@ -335,8 +365,8 @@ async def _send_email(
         if check_budget("resend", settings.resend_daily_limit):
             attempted = True
             try:
-                await asyncio.to_thread(_send_via_resend, to_email, subject, html, unsubscribe_url, attachments)
-                return "resend"
+                detail = await asyncio.to_thread(_send_via_resend, to_email, subject, html, unsubscribe_url, attachments)
+                return "resend", detail
             except Exception as e:
                 last_error = e
                 logger.warning(f"   Resend send failed: {e}")
@@ -479,14 +509,15 @@ async def send_morning_digest(user_id: str) -> bool:
         "subject": subject,
     }
     try:
-        provider = await _send_email(user["email"], subject, html, unsubscribe_url, attachments)
-        if provider is None:
+        result = await _send_email(user["email"], subject, html, unsubscribe_url, attachments)
+        if result is None:
             return False
+        provider, detail = result
 
-        _insert_email_log(supabase, {**log_row, "status": "sent", "provider": provider})
+        _insert_email_log(supabase, {**log_row, "status": "sent", "provider": provider, "error_message": detail})
         match_ids = [m["id"] for m in matches]
         supabase.table("user_jobs").update({"status": "emailed"}).in_("id", match_ids).execute()
-        logger.info(f"   ✅ Digest sent to {user['email']} via {provider} ({len(jobs_data)} jobs)")
+        logger.info(f"   ✅ Digest sent to {user['email']} via {provider} ({len(jobs_data)} jobs) — {detail}")
         return True
 
     except Exception as e:
@@ -582,11 +613,12 @@ async def send_weekly_summary(user_id: str) -> bool:
 
     log_row = {"user_id": user_id, "email_address": user["email"], "type": "weekly_summary", "subject": subject}
     try:
-        provider = await _send_email(user["email"], subject, html, unsubscribe_url)
-        if provider is None:
+        result = await _send_email(user["email"], subject, html, unsubscribe_url)
+        if result is None:
             return False
-        _insert_email_log(supabase, {**log_row, "status": "sent", "provider": provider})
-        logger.info(f"   ✅ Weekly summary sent to {user['email']} via {provider}")
+        provider, detail = result
+        _insert_email_log(supabase, {**log_row, "status": "sent", "provider": provider, "error_message": detail})
+        logger.info(f"   ✅ Weekly summary sent to {user['email']} via {provider} — {detail}")
         return True
     except Exception as e:
         logger.error(f"   ❌ Weekly summary failed for {user['email']}: {e}")

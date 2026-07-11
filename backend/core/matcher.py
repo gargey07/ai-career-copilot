@@ -31,6 +31,8 @@ from core.ai import get_ai_provider
 from core.config import get_settings
 from core.skill_maps import JOB_CATEGORIES
 from database.supabase_client import get_supabase
+# Safe import direction: jobs.fetchers never imports core.matcher.
+from jobs.fetchers import experience_months_from_text
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -167,11 +169,32 @@ _JOB_BAND_INDEX = {"entry": 0, "junior": 0, "fresher": 0, "mid": 1, "senior": 2,
 _EXPERIENCE_DOWNLEVEL_PENALTY = 0.9
 
 
+def _job_required_months(job: dict) -> int | None:
+    """
+    Required experience for a job, in months. The stored column when
+    present; otherwise parsed from the description ON THE FLY — jobs
+    fetched before the required_experience_months column shipped are all
+    NULL there, yet many state the requirement in plain text ("7+ years of
+    experience"), and "unknown passes the gate" must not apply to those.
+    The parse result is written back onto the dict so repeat callers
+    (gate, penalty, breakdown) don't re-run the regex.
+    """
+    months = job.get("required_experience_months")
+    if isinstance(months, (int, float)) and months > 0:
+        return int(months)
+    description = job.get("description")
+    if description:
+        parsed = experience_months_from_text(description)
+        job["required_experience_months"] = parsed  # cache (None is fine)
+        return parsed
+    return None
+
+
 def _job_band_index(job: dict) -> int | None:
     """Coarse band for a job: months when known, else title-inferred
     seniority_level, else None (unknown)."""
-    months = job.get("required_experience_months")
-    if isinstance(months, (int, float)) and months > 0:
+    months = _job_required_months(job)
+    if months:
         return 0 if months < 36 else (1 if months < 60 else 2)
     return _JOB_BAND_INDEX.get((job.get("seniority_level") or "").strip().lower())
 
@@ -189,8 +212,8 @@ def _experience_ok(job: dict, user_level: str) -> bool:
     top = _USER_BAND_TOP_MONTHS[level]
     if top is None:
         return True  # senior/lead users: no upward exclusion possible
-    months = job.get("required_experience_months")
-    if isinstance(months, (int, float)) and months > 0:
+    months = _job_required_months(job)
+    if months:
         return months <= top + _EXPERIENCE_TOLERANCE_MONTHS
     job_idx = _JOB_BAND_INDEX.get((job.get("seniority_level") or "").strip().lower())
     if job_idx is None:

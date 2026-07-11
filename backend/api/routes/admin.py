@@ -61,6 +61,62 @@ async def _run_and_log() -> None:
         await send_admin_alert("Manual pipeline run failed", f"The admin-triggered pipeline run crashed:\n\n{e!r}")
 
 
+async def _backfill_experience() -> None:
+    """One-time-ish: parse required experience out of the description for
+    every stored job that predates the required_experience_months column
+    (all NULL there). Without this, the experience gate treats old jobs as
+    'unknown' — which passes — and a fresher keeps seeing '7+ years' roles
+    that state the requirement only in their description text. Idempotent:
+    already-filled rows are never touched, so re-running is harmless."""
+    from jobs.fetchers import experience_months_from_text
+
+    supabase = get_supabase()
+    updated = scanned = 0
+    page_size = 200
+    offset = 0
+    try:
+        while True:
+            resp = (
+                supabase.table("jobs")
+                .select("id, description")
+                .is_("required_experience_months", "null")
+                .order("collected_at", desc=True)
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            rows = resp.data or []
+            if not rows:
+                break
+            for row in rows:
+                scanned += 1
+                months = experience_months_from_text(row.get("description") or "")
+                if months:
+                    supabase.table("jobs").update(
+                        {"required_experience_months": months}
+                    ).eq("id", row["id"]).execute()
+                    updated += 1
+            if len(rows) < page_size:
+                break
+            offset += page_size
+        logger.info(f"✅ Experience backfill: {updated}/{scanned} NULL-experience jobs got a parsed value")
+    except Exception as e:
+        logger.error(f"❌ Experience backfill failed after {updated}/{scanned}: {e}")
+
+
+@router.post("/backfill-experience")
+async def backfill_experience_now(background_tasks: BackgroundTasks, token: str = Query(..., description="Admin token")):
+    """Parse experience requirements from existing jobs' descriptions in
+    the background. Run once after the required_experience_months
+    migration; safe to re-run."""
+    _require_admin(token)
+    background_tasks.add_task(_audit, "experience_backfill_triggered")
+    background_tasks.add_task(_backfill_experience)
+    return {
+        "status": "started",
+        "message": "Backfilling experience data from job descriptions in the background — check the server log for the summary line.",
+    }
+
+
 @router.post("/run-pipeline")
 async def run_pipeline_now(background_tasks: BackgroundTasks, token: str = Query(..., description="Admin token")):
     """Trigger a fetch+match run in the background. Returns immediately.

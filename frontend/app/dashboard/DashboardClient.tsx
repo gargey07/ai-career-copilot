@@ -269,10 +269,25 @@ function ResumeFeedback({ userId, token, match }: { userId: string; token: strin
   );
 }
 
+// PDF generation runs in the background — after kicking one off, the page
+// refetches itself once the render has had time to finish, instead of
+// telling the user to refresh manually and leaving a stuck-looking label.
+const REFRESH_EVENT = "acc:refresh-dashboard";
+const PDF_REFRESH_DELAY_MS = 50_000;
+
+function useDelayedDashboardRefresh(active: boolean) {
+  useEffect(() => {
+    if (!active) return;
+    const timer = setTimeout(() => window.dispatchEvent(new Event(REFRESH_EVENT)), PDF_REFRESH_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [active]);
+}
+
 // ── Retry button for a failed/stuck PDF (TICKET-020) ────────────────────────────
 // Never leave a permanent "Resume generating…" with no way out.
 function RetryPdfButton({ userId, token, matchId }: { userId: string; token: string; matchId: string }) {
   const [state, setState] = useState<"idle" | "retrying" | "started">("idle");
+  useDelayedDashboardRefresh(state === "started");
 
   const retry = async () => {
     setState("retrying");
@@ -288,7 +303,7 @@ function RetryPdfButton({ userId, token, matchId }: { userId: string; token: str
     return (
       <span className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm" style={{ background: "var(--surface-muted)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
         <Clock size={16} strokeWidth={1.75} />
-        Retrying — refresh in about a minute
+        Retrying — this page refreshes itself in about a minute
       </span>
     );
   }
@@ -353,6 +368,7 @@ function AppliedButton({ userId, token, match }: { userId: string; token: string
 // top-N auto-generation didn't cover. Quota-gated server-side.
 function GenerateResumeButton({ userId, token, matchId }: { userId: string; token: string; matchId: string }) {
   const [state, setState] = useState<"idle" | "requesting" | "started" | "capped">("idle");
+  useDelayedDashboardRefresh(state === "started");
 
   const generate = async () => {
     setState("requesting");
@@ -376,7 +392,7 @@ function GenerateResumeButton({ userId, token, matchId }: { userId: string; toke
     return (
       <span className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm" style={{ background: "var(--surface-muted)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
         <Clock size={16} strokeWidth={1.75} />
-        Generating — refresh in about a minute
+        Generating — this page refreshes itself in about a minute
       </span>
     );
   }
@@ -1041,6 +1057,15 @@ function DashboardContent() {
   const [showAllToday, setShowAllToday] = useState(false);
 
   const today = new Date().toISOString().split("T")[0];
+
+  // PDF generate/retry buttons fire this after giving the render time to
+  // finish — refetching turns "Generating…" into the Download button
+  // without the user having to reload manually.
+  useEffect(() => {
+    const onRefresh = () => setReloadKey((k) => k + 1);
+    window.addEventListener(REFRESH_EVENT, onRefresh);
+    return () => window.removeEventListener(REFRESH_EVENT, onRefresh);
+  }, []);
 
   useEffect(() => {
     // The signed token comes from the URL (email links) or from what this

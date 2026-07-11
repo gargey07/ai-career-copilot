@@ -63,9 +63,14 @@ async def _run_and_log() -> None:
 
 @router.post("/run-pipeline")
 async def run_pipeline_now(background_tasks: BackgroundTasks, token: str = Query(..., description="Admin token")):
-    """Trigger a fetch+match run in the background. Returns immediately."""
+    """Trigger a fetch+match run in the background. Returns immediately.
+
+    _audit() runs as its OWN background task too, not inline — it's a
+    synchronous, unbounded Supabase call, and this endpoint's whole
+    contract (the GitHub Actions cron trigger calls it with a hard
+    curl --max-time) is that nothing on the response path can stall it."""
     _require_admin(token)
-    _audit("pipeline_triggered")
+    background_tasks.add_task(_audit, "pipeline_triggered")
     background_tasks.add_task(_run_and_log)
     return {
         "status": "started",

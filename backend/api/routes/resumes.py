@@ -20,7 +20,7 @@ from uuid import uuid4
 import httpx
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from core.config import get_settings
 from core.resume_parser import (
@@ -134,6 +134,23 @@ class ConfirmProfileRequest(BaseModel):
     work_type: list[str] = Field(default_factory=list)
     resume_file_path: Optional[str] = None  # set if this profile came from an uploaded resume
     resume_template: str = "modern"  # which PDF design their tailored resumes use
+
+    @field_validator("preferred_locations")
+    @classmethod
+    def _locations_must_resolve(cls, v: list[str]) -> list[str]:
+        # Defense in depth behind the signup form's add-time validation
+        # (GET /api/suggestions/locations/validate): an unresolvable
+        # location silently degrades fetching, so direct-API saves get the
+        # same rule. core/locations.py owns what "resolvable" means.
+        from core.locations import location_is_resolvable
+
+        bad = [loc for loc in v if not location_is_resolvable(loc)]
+        if bad:
+            raise ValueError(
+                f"Unrecognized location(s): {', '.join(bad)} — use \"City, Country\" "
+                '(e.g. "Indore, India"), a country name, or "Remote".'
+            )
+        return v
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

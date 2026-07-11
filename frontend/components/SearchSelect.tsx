@@ -17,6 +17,14 @@ interface SearchSelectProps {
   staticOptions?: string[];
   placeholder?: string;
   helperText?: string;
+  /**
+   * Validates a CUSTOM (typed) entry before it becomes a chip — return an
+   * error message to reject, null to accept. Entries picked from the
+   * suggestion list skip this (the list is pre-vetted). Used by the
+   * locations field so unresolvable places get a hint instead of silently
+   * degrading job fetching later.
+   */
+  validateAdd?: (value: string) => Promise<string | null>;
 }
 
 // Reusable type-ahead multi-select: chips for selected values, live
@@ -30,11 +38,14 @@ export default function SearchSelect({
   staticOptions,
   placeholder,
   helperText,
+  validateAdd,
 }: SearchSelectProps) {
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+  const [validating, setValidating] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const requestSeq = useRef(0); // guards against out-of-order responses
   const debouncedQuery = useDebouncedValue(query, 150);
@@ -84,9 +95,27 @@ export default function SearchSelect({
       });
   }, [debouncedQuery, apiField]);
 
-  const addValue = (val: string) => {
+  const addValue = async (val: string, vetted = false) => {
     const trimmed = val.trim();
     if (!trimmed) return;
+    // Custom (typed) entries get validated; suggestion picks are vetted.
+    // Typing something that exactly matches a suggestion counts as vetted.
+    const matchesSuggestion = suggestions.some((s) => s.toLowerCase() === trimmed.toLowerCase());
+    if (!vetted && !matchesSuggestion && validateAdd) {
+      setValidating(true);
+      let error: string | null = null;
+      try {
+        error = await validateAdd(trimmed);
+      } catch {
+        error = null; // fail open — validation must never block signup on a network blip
+      }
+      setValidating(false);
+      if (error) {
+        setAddError(error);
+        return; // keep the query so the user can fix it
+      }
+    }
+    setAddError(null);
     if (!values.some((v) => v.toLowerCase() === trimmed.toLowerCase())) {
       onChange([...values, trimmed]);
     }
@@ -128,6 +157,7 @@ export default function SearchSelect({
           onChange={(e) => {
             setQuery(e.target.value);
             setOpen(true);
+            if (addError) setAddError(null);
           }}
           onFocus={() => setOpen(true)}
           onKeyDown={(e) => {
@@ -143,6 +173,7 @@ export default function SearchSelect({
       </div>
 
       {helperText && <p className="text-xs" style={{ color: "var(--text-muted)" }}>{helperText}</p>}
+      {addError && <p className="text-xs" style={{ color: "var(--coral)" }}>{addError}</p>}
 
       {open && (query.length > 0 || visibleSuggestions.length > 0 || loading) && (
         <div
@@ -161,7 +192,7 @@ export default function SearchSelect({
                 <button
                   key={s}
                   type="button"
-                  onClick={() => addValue(s)}
+                  onClick={() => addValue(s, true)}
                   className="w-full text-left px-4 py-2.5 text-sm transition hover:bg-[var(--surface-muted)]"
                   style={{ color: "var(--text)" }}
                 >
@@ -172,10 +203,11 @@ export default function SearchSelect({
                 <button
                   type="button"
                   onClick={() => addValue(query)}
-                  className="w-full text-left px-4 py-2.5 text-sm font-medium border-t transition hover:bg-[var(--surface-muted)]"
+                  disabled={validating}
+                  className="w-full text-left px-4 py-2.5 text-sm font-medium border-t transition hover:bg-[var(--surface-muted)] disabled:opacity-60"
                   style={{ color: "var(--primary)", borderColor: "var(--border)" }}
                 >
-                  + Add &quot;{query.trim()}&quot;
+                  {validating ? "Checking…" : <>+ Add &quot;{query.trim()}&quot;</>}
                 </button>
               )}
               {!query.trim() && visibleSuggestions.length === 0 && (

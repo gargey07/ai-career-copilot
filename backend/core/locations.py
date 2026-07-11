@@ -51,17 +51,24 @@ CITY_COUNTRY: dict[str, str] = {
     "mumbai": "in", "delhi": "in", "new delhi": "in", "bangalore": "in", "bengaluru": "in",
     "hyderabad": "in", "chennai": "in", "pune": "in", "kolkata": "in", "ahmedabad": "in",
     "gurgaon": "in", "gurugram": "in", "noida": "in", "jaipur": "in", "surat": "in",
+    "indore": "in", "lucknow": "in", "bhopal": "in", "nagpur": "in", "coimbatore": "in",
+    "kochi": "in", "chandigarh": "in", "visakhapatnam": "in", "vadodara": "in", "rajkot": "in",
+    "mysore": "in", "mysuru": "in", "thiruvananthapuram": "in", "trivandrum": "in",
     # Gulf
     "dubai": "ae", "abu dhabi": "ae", "sharjah": "ae", "doha": "qa", "riyadh": "sa", "jeddah": "sa",
     # UK / Europe
     "london": "gb", "manchester": "gb", "birmingham": "gb", "edinburgh": "gb",
-    "berlin": "de", "munich": "de", "frankfurt": "de", "paris": "fr", "amsterdam": "nl",
+    "leeds": "gb", "glasgow": "gb",
+    "berlin": "de", "munich": "de", "frankfurt": "de", "hamburg": "de", "stuttgart": "de",
+    "paris": "fr", "lyon": "fr", "amsterdam": "nl",
     "dublin": "ie", "zurich": "ch", "madrid": "es", "barcelona": "es", "milan": "it", "warsaw": "pl",
     # North America
     "new york": "us", "san francisco": "us", "seattle": "us", "austin": "us", "boston": "us",
-    "chicago": "us", "los angeles": "us", "toronto": "ca", "vancouver": "ca",
+    "chicago": "us", "los angeles": "us", "houston": "us", "dallas": "us",
+    "toronto": "ca", "vancouver": "ca", "montreal": "ca", "ottawa": "ca",
     # APAC / other
-    "singapore": "sg", "sydney": "au", "melbourne": "au", "auckland": "nz", "tokyo": "jp",
+    "singapore": "sg", "sydney": "au", "melbourne": "au", "brisbane": "au", "perth": "au",
+    "auckland": "nz", "wellington": "nz", "tokyo": "jp",
     "sao paulo": "br", "mexico city": "mx", "johannesburg": "za", "cape town": "za",
 }
 
@@ -121,6 +128,19 @@ def _build_suggestion_list() -> list[str]:
 
 
 LOCATION_SUGGESTIONS: list[str] = _build_suggestion_list()
+
+
+def location_is_resolvable(raw: str) -> bool:
+    """
+    True when a saved location would actually steer fetching: remote/empty
+    (fine — remote sources always run), or anything that resolves to a
+    known country. Unresolvable free text ("asdfgh", or a city we don't
+    know without its country) silently skips Adzuna and feeds JSearch
+    noise, so signup validates entries through this (see
+    /api/suggestions/locations/validate and ConfirmProfileRequest).
+    """
+    resolved = resolve_fetch_location(raw)
+    return resolved is None or resolved.get("country_code") is not None
 
 
 def suggest_locations(query: str, limit: int = 20) -> list[str]:

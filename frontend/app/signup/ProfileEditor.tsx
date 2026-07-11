@@ -64,6 +64,20 @@ const EXP_LEVELS = [
 ];
 const WORK_TYPES = ["Remote", "Onsite", "Hybrid"];
 
+// Custom-typed locations get checked against the backend's location
+// taxonomy before becoming a chip — an unresolvable one would silently
+// degrade job fetching. Fail open: a network blip must never block signup.
+async function validateLocation(value: string): Promise<string | null> {
+  try {
+    const r = await fetch(`${API_URL}/api/suggestions/locations/validate?q=${encodeURIComponent(value)}`);
+    if (!r.ok) return null;
+    const data = await r.json();
+    return data.valid ? null : (data.hint as string) || "We don't recognize this location.";
+  } catch {
+    return null;
+  }
+}
+
 const chipButton = (active: boolean) =>
   `cursor-pointer px-4 py-2 rounded-md text-sm font-medium transition border ${
     active
@@ -409,7 +423,8 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
             values={profile.preferred_locations}
             onChange={(v) => update("preferred_locations", v)}
             apiField="locations"
-            helperText="Cities, countries, or 'Remote — Worldwide' if location doesn't matter. Not in the list? Type it and hit Enter."
+            helperText='Cities, countries, or "Remote — Worldwide" if location doesn&apos;t matter. Not in the list? Type "City, Country" (e.g. "Indore, India") and hit Enter.'
+            validateAdd={validateLocation}
           />
         </div>
       </SectionCard>

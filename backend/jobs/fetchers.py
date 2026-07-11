@@ -172,6 +172,14 @@ class AdzunaFetcher:
                     data = resp.json()
 
                     for job in data.get("results", []):
+                        # Adzuna's `what` matching is fuzzy — results that
+                        # share no meaningful query term get dropped here,
+                        # BEFORE run_all_fetchers stamps search_category on
+                        # them, because that stamp is trusted outright by
+                        # the matcher's category gate. Same rule the free
+                        # sources (Remotive/Greenhouse/Jobicy) always had.
+                        if not _title_matches(job.get("title", ""), query):
+                            continue
                         jobs.append(normalize_job(
                             source="adzuna",
                             external_id=job.get("id", ""),
@@ -237,6 +245,10 @@ class JSearchFetcher:
                     data = resp.json()
 
                     for job in data.get("data", []):
+                        # Same fuzzy-source rule as Adzuna above: no query
+                        # term in the title -> never stored, never stamped.
+                        if not _title_matches(job.get("job_title", ""), query):
+                            continue
                         title_lower = job.get("job_title", "").lower()
                         seniority = (
                             "senior" if "senior" in title_lower else

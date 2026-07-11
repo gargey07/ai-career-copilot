@@ -56,6 +56,14 @@ _GENERIC_ROLE_NOUNS = {
     if sum(1 for k2 in JOB_CATEGORIES if word in _tokenize_category_name(k2)) > 1
 }
 
+# Words so common in ANY job's text that they carry zero category signal —
+# "it" (from e.g. a "Technical IT Engineer" target role) is literally the
+# English pronoun in every description, and "technical"/seniority words
+# appear in most. These leaked graphic-design jobs to a Python/AI user in
+# production: the 2-term description fallback cleared on "it" + "data".
+# Gating terms only — scoring (_user_terms) is unaffected.
+_GATE_STOPWORDS = {"it", "technical", "senior", "junior", "lead"}
+
 
 def _tokenize(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9+#.]+", str(text or "").lower()))
@@ -112,17 +120,23 @@ def _category_relevant(job: dict, user_categories: set[str], category_terms: set
         return tag in user_categories
     if not category_terms:
         return True  # nothing to check against — don't blanket-exclude
-    # Generic multi-category nouns ("designer", "developer", ...) can't
-    # single-handedly clear the title gate — see _GENERIC_ROLE_NOUNS.
-    specific_terms = category_terms - _GENERIC_ROLE_NOUNS
+    # Generic multi-category nouns ("designer", "developer", ...) and
+    # no-signal stopwords ("it", "technical", ...) can't clear either gate
+    # — see _GENERIC_ROLE_NOUNS / _GATE_STOPWORDS above.
+    specific_terms = category_terms - _GENERIC_ROLE_NOUNS - _GATE_STOPWORDS
     title_words = _tokenize(job.get("title", ""))
-    if specific_terms and (specific_terms & title_words):
-        return True
-    # The two-term description check still allows the full term set
-    # (including generic nouns) — requiring two co-occurring terms is
-    # already a much weaker false-positive risk than one.
     desc_words = _tokenize(job.get("description", ""))
-    return len(category_terms & desc_words) >= 2
+    if not specific_terms:
+        # Every gating term was generic (e.g. "data engineer" — both words
+        # multi-category). The weak full-set check beats blanket-passing.
+        return len((category_terms - _GATE_STOPWORDS) & desc_words) >= 2
+    if specific_terms & title_words:
+        return True
+    # Description fallback: two co-occurring SPECIFIC terms. (This used to
+    # allow the full term set including generic nouns — which is exactly
+    # how a graphic-design description passed for a Python/AI user on
+    # "it" + "data".)
+    return len(specific_terms & desc_words) >= 2
 
 
 # ── Experience-level gate (TICKET-031) ────────────────────────────────────────
@@ -434,7 +448,10 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
                 if no_exp_data:
                     logger.info(f"   {no_exp_data}/{len(relevant)} vector candidates have no experience data (passed unfiltered)")
             else:
-                relevant = jobs
+                # Metadata load failed — degrade to the tag-less TEXT gate,
+                # not to no gate at all (a transient DB hiccup must never
+                # mean "show every profession to everyone" for that run).
+                relevant = [j for j in jobs if _category_relevant(j, user_categories, category_terms)]
 
             relevant = _apply_relevance_penalties(relevant, penalties)
             relevant = _apply_experience_penalty(relevant, user_level)

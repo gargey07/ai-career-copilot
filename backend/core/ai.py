@@ -11,6 +11,7 @@ Usage:
     embedding = await ai.embed_text(resume_text)
 """
 from __future__ import annotations
+import asyncio
 import time
 import logging
 from abc import ABC, abstractmethod
@@ -67,21 +68,40 @@ class GeminiProvider(AIProvider):
         """
         Calls Gemini to generate text.
         Automatically respects the 15 RPM rate limit with sleep().
+
+        google-generativeai's client is fully synchronous — genai.*() calls
+        are real blocking network I/O, not asyncio-compatible despite this
+        method's `async def`. Uvicorn runs a single worker here (no
+        --workers flag), so a blocking call anywhere doesn't just slow its
+        own request — it freezes the ENTIRE event loop, including brand
+        new incoming connections, for its full duration. This was the
+        actual cause of the nightly pipeline's "curl: (28) Connection
+        timed out after 120000ms" with zero response: a prior/concurrent
+        pipeline run's chain of blocking Gemini calls (each up to
+        _PROVIDER_TIMEOUT_SECONDS, plus up to 4s of rate-limit sleep,
+        serially, one per job/user) monopolized the only thread handling
+        HTTP, so the server couldn't even accept the new TCP connection
+        until that chain finished — easily longer than 120s for a full
+        run. asyncio.to_thread() below moves the blocking call to a
+        worker thread so the event loop stays free to serve other
+        requests while this one is in flight.
         """
         if not check_budget("gemini_generate", settings.gemini_generate_daily_limit):
             raise BudgetExceededError("Gemini generate_text daily budget exhausted")
 
         global _last_gemini_call
 
-        # Rate limiting: enforce minimum delay between calls
+        # Rate limiting: enforce minimum delay between calls — await, not
+        # time.sleep(), so this wait doesn't freeze the event loop either.
         elapsed = time.time() - _last_gemini_call
         if elapsed < _GEMINI_MIN_DELAY:
             wait = _GEMINI_MIN_DELAY - elapsed
             logger.debug(f"⏳ Gemini rate limit: waiting {wait:.1f}s")
-            time.sleep(wait)
+            await asyncio.sleep(wait)
 
         try:
-            response = self.model.generate_content(
+            response = await asyncio.to_thread(
+                self.model.generate_content,
                 prompt,
                 generation_config=genai.GenerationConfig(temperature=temperature),
                 request_options={"timeout": _PROVIDER_TIMEOUT_SECONDS},
@@ -93,11 +113,14 @@ class GeminiProvider(AIProvider):
             raise
 
     async def embed_text(self, text: str) -> list[float]:
-        """Embeds text using Gemini's text-embedding model."""
+        """Embeds text using Gemini's text-embedding model. See
+        generate_text's docstring — same blocking-SDK-in-a-single-worker
+        issue applies here, same asyncio.to_thread fix."""
         if not check_budget("gemini_embed", settings.gemini_embed_daily_limit):
             raise BudgetExceededError("Gemini embed_text daily budget exhausted")
         try:
-            result = genai.embed_content(
+            result = await asyncio.to_thread(
+                genai.embed_content,
                 model=self.embed_model,
                 content=text,
                 task_type="RETRIEVAL_DOCUMENT",

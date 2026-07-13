@@ -182,6 +182,82 @@ async def backfill_seniority_now(background_tasks: BackgroundTasks, token: str =
     }
 
 
+async def _classify_experience_ai() -> None:
+    """
+    One-time-ish CATCH-UP for the backlog: the free regex/title backfills
+    above catch what a hand-written parser can, but some postings phrase
+    requirements in ways no fixed pattern list can enumerate ("recent
+    graduates welcome", "you'll mentor junior engineers") — this is the
+    same core/job_classifier.classify_job AI fallback the daily pipeline
+    already runs on a small batch automatically
+    (core/pipeline_runner._classify_unknown_experience_jobs); this is the
+    admin-triggered version for sweeping the CURRENT backlog rather than
+    waiting on the daily trickle. Budget-checked per item (job_classify's
+    own daily cap), so it naturally stops rather than needing its own
+    limit — and stops the whole scan early after several consecutive
+    empty results, since that's a strong signal the budget/provider is
+    exhausted for today rather than worth scanning every remaining row.
+    """
+    from core.job_classifier import classify_job
+
+    supabase = get_supabase()
+    updated = scanned = 0
+    consecutive_empty = 0
+    page_size = 100
+    offset = 0
+    exhausted = False
+    try:
+        while not exhausted:
+            resp = (
+                supabase.table("jobs")
+                .select("id, title, description")
+                .is_("required_experience_months", "null")
+                .is_("seniority_level", "null")
+                .order("collected_at", desc=True)
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            rows = resp.data or []
+            if not rows:
+                break
+            for row in rows:
+                scanned += 1
+                result = await classify_job(row)
+                if result is None:
+                    consecutive_empty += 1
+                    if consecutive_empty >= 10:
+                        logger.info(f"   Stopping AI classification catch-up after {consecutive_empty} consecutive empty results (budget/provider likely exhausted)")
+                        exhausted = True
+                        break
+                    continue
+                consecutive_empty = 0
+                supabase.table("jobs").update(result).eq("id", row["id"]).execute()
+                updated += 1
+            if len(rows) < page_size:
+                break
+            offset += page_size
+    except Exception as e:
+        logger.error(f"❌ AI classification catch-up failed after {updated}/{scanned}: {e}")
+        return
+    logger.info(f"✅ AI classification catch-up: {updated}/{scanned} jobs got a value")
+
+
+@router.post("/classify-experience-ai")
+async def classify_experience_ai_now(background_tasks: BackgroundTasks, token: str = Query(..., description="Admin token")):
+    """AI fallback classification for jobs the free regex/title backfills
+    couldn't parse, in the background. Bounded by job_classify's own
+    daily budget cap (core/config.py); safe to re-run — only jobs still
+    missing BOTH required_experience_months and seniority_level are
+    touched."""
+    _require_admin(token)
+    background_tasks.add_task(_audit, "classify_experience_ai_triggered")
+    background_tasks.add_task(_classify_experience_ai)
+    return {
+        "status": "started",
+        "message": "Classifying remaining unknown-experience jobs with AI in the background — check the server log for the summary line.",
+    }
+
+
 @router.post("/run-pipeline")
 async def run_pipeline_now(background_tasks: BackgroundTasks, token: str = Query(..., description="Admin token")):
     """Trigger a fetch+match run in the background. Returns immediately.

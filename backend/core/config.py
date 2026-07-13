@@ -146,6 +146,12 @@ class Settings(BaseSettings):
     # involved, cheap, but unauthenticated (fires pre-account during
     # onboarding), so still worth a sane per-IP daily ceiling.
     resume_preview_daily_limit_per_ip: int = 200
+    # core/job_classifier.py — AI fallback for experience/seniority
+    # extraction, only ever called for jobs the free regex+title pass
+    # (jobs/fetchers.py) came up empty on. Its own bucket, separate from
+    # resume generation / recruiter evals, so it can't cannibalize their
+    # share of the same provider waterfall's daily budget.
+    job_classify_daily_limit: int = 100
 
     # PDF rendering engine: 'weasyprint' (pure-Python, ~10x lighter on RAM,
     # needs pango/cairo system libs) or 'chromium' (Playwright). Defaults to

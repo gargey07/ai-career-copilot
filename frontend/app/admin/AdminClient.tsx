@@ -550,6 +550,7 @@ export default function AdminClient() {
   const runPipeline = () => runAdminAction("run-pipeline", "Couldn't start the pipeline.");
   const backfillExperience = () => runAdminAction("backfill-experience", "Couldn't start the experience backfill.");
   const backfillSeniority = () => runAdminAction("backfill-seniority", "Couldn't start the seniority backfill.");
+  const classifyExperienceAi = () => runAdminAction("classify-experience-ai", "Couldn't start the AI classification.");
 
   // ── Locked state: ask for the token ──────────────────────────────────────────
   if (!token && !loading) {
@@ -658,6 +659,13 @@ export default function AdminClient() {
                   </Button>
                   <Button variant="secondary" onClick={backfillSeniority} disabled={pipelineRunning}>
                     Backfill seniority
+                  </Button>
+                  {/* AI fallback for whatever's left after the two free
+                      backfills above — phrasing like "recent graduates
+                      welcome" that no regex/keyword list can enumerate.
+                      Budget-capped (job_classify_daily_limit), safe to re-run. */}
+                  <Button variant="secondary" onClick={classifyExperienceAi} disabled={pipelineRunning}>
+                    Classify experience (AI)
                   </Button>
                 </div>
               }

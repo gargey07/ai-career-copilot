@@ -63,6 +63,56 @@ async def _embed_unembedded_jobs(batch_size: int = 50) -> int:
     return count
 
 
+async def _classify_unknown_experience_jobs(batch_size: int = 30) -> int:
+    """
+    AI fallback for jobs the free, instant pass (jobs/fetchers.py's
+    experience_months_from_text + infer_seniority_level) came up
+    completely empty on — phrasing like "recent graduates welcome" that
+    no regex/keyword list can enumerate. Only ever targets that residual
+    bucket (WHERE both columns are still NULL), so it's a fallback, not a
+    replacement for the free pass. Best-effort and budget-capped, same
+    degrade-gracefully contract as _embed_unembedded_jobs above — stops
+    quietly (not an error) the moment the daily job_classify budget or
+    the AI provider itself is unavailable; the matcher's existing
+    "unknown data passes" policy covers the rest.
+    """
+    supabase = get_supabase()
+    try:
+        from core.job_classifier import classify_job
+    except Exception as e:
+        logger.info(f"   Skipping AI experience classification (unavailable: {e})")
+        return 0
+
+    resp = (
+        supabase.table("jobs")
+        .select("id, title, description")
+        .is_("required_experience_months", "null")
+        .is_("seniority_level", "null")
+        .limit(batch_size)
+        .execute()
+    )
+    jobs = resp.data or []
+    count = 0
+    for job in jobs:
+        # classify_job checks the daily budget BEFORE making any AI call,
+        # so once it's exhausted every remaining job in this batch
+        # returns None near-instantly (no wasted spend) — skip and move
+        # on rather than breaking the loop, so one job's unparseable
+        # output (a real but separate failure mode) doesn't cost the rest
+        # of the batch their fair shot.
+        result = await classify_job(job)
+        if result is None:
+            continue
+        try:
+            supabase.table("jobs").update(result).eq("id", job["id"]).execute()
+            count += 1
+        except Exception as e:
+            logger.warning(f"   Couldn't write AI classification for job {job['id']} ({e}) — continuing.")
+    if jobs:
+        logger.info(f"   🧠 AI experience classification: {count}/{len(jobs)} jobs got a value")
+    return count
+
+
 def _queries_for_category(category: str) -> list[str]:
     """Known category -> its curated search queries; free-text -> the text itself."""
     if category in JOB_CATEGORIES:
@@ -193,11 +243,13 @@ async def run_fetch_and_match_jobs_only() -> dict:
                 logger.error(f"   Fetch failed for '{category}' / '{query}': {e}")
 
     embedded = await _embed_unembedded_jobs()
+    experience_classified = await _classify_unknown_experience_jobs()
     match_result = await run_matching_for_all_users()
     return {
         "categories": categories,
         "jobs_fetched": total_fetched,
         "jobs_embedded": embedded,
+        "jobs_experience_classified": experience_classified,
         **match_result,
     }
 

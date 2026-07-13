@@ -156,8 +156,16 @@ _USER_BAND_TOP_MONTHS: dict[str, int | None] = {
     "mid": 60,
     "senior": None, "lead": None,
 }
-# A fresher can reasonably stretch to a "1-2 years" job; never to "5+".
-_EXPERIENCE_TOLERANCE_MONTHS = 12
+# 2026-07: was 12, which let a "2-5 years" job (24-month floor) pass for a
+# fresher (top=12) — a floor-only check treats "2-5 years" the same as a
+# flat "2 years" ask, but a job seeker reading "2-5 years required" does
+# not perceive themselves as qualified at 0-1 years. Zero tolerance means
+# the ceiling is exactly each band's own top: a fresher's "1-2 years" job
+# (floor=12=their own top) still passes with NO tolerance needed; nothing
+# requiring more than the user's stated band does. Matches this section's
+# original intent ("stretch to '1-2 years'; never to '5+'") exactly,
+# instead of contradicting it.
+_EXPERIENCE_TOLERANCE_MONTHS = 0
 
 # Band indices for the coarse fallback when a job has no months data —
 # only the title-inferred seniority_level. User side:

@@ -110,6 +110,17 @@ def normalize_job(
 # ── Query matching (profession-agnostic) ──────────────────────────────────────
 _STOPWORDS = {"the", "and", "for", "with", "job", "jobs", "role", "roles", "senior", "junior"}
 
+# Qualifier words that prefix MANY unrelated professions — "product" alone
+# can't tell "Product Manager" from "Product Designer" apart; same idea as
+# core/matcher.py's _GATE_STOPWORDS, but this is fetchers.py's OWN simpler
+# query-vs-title check, not matcher.py's category gate (different code,
+# needed its own copy — importing matcher.py here would create a circular
+# import, since matcher.py already imports from this module).
+_QUALIFIER_WORDS = {
+    "product", "digital", "content", "technical", "creative",
+    "associate", "principal", "staff", "chief", "global", "regional",
+}
+
 
 def _query_terms(query: str) -> list[str]:
     """Meaningful lowercase words from a search query (drops noise/stopwords)."""
@@ -121,12 +132,23 @@ def _title_matches(title: str, query: str) -> bool:
     True if the job title is relevant to the query. Empty query = accept all.
     Replaces the old hardcoded design-only keyword filters so fetchers work for
     any profession (backend, PM, marketing, etc.).
+
+    Word-boundary matching (tokenized set membership), NOT substring
+    containment — a naive `"ai" in title.lower()` matches "email"/"retail"/
+    "detail", and `"product" in title.lower()` matched "Product Designer"
+    for a "Product Manager" query, showing a developer's profile a UX
+    design job requiring "3+ years of UX/UI design experience" (a live
+    production bug). Qualifier words are excluded from what counts as a
+    match — "Product Manager" needs "manager" specifically, not just any
+    shared prefix word — falling back to the full term set only if every
+    term happened to be a qualifier (never blanket-reject a real query).
     """
     terms = _query_terms(query)
     if not terms:
         return True
-    t = (title or "").lower()
-    return any(term in t for term in terms)
+    title_words = set(re.findall(r"[a-z0-9+#]+", (title or "").lower()))
+    specific_terms = [t for t in terms if t not in _QUALIFIER_WORDS] or terms
+    return any(term in title_words for term in specific_terms)
 
 
 # ── Adzuna Fetcher ────────────────────────────────────────────────────────────

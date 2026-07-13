@@ -9,6 +9,7 @@ This file defines:
   2. SKILL_EXPANSION — core skill → implied skills per category
   3. expand_skills() — main function used by optimizer
 """
+import re
 
 # ── Category Definitions ──────────────────────────────────────────────────────
 
@@ -486,6 +487,40 @@ ALL_TOOLS  = _flatten("tools")
 ALL_SKILLS = _flatten("skills")
 
 _SUGGESTION_SOURCES = {"roles": ALL_ROLES, "tools": ALL_TOOLS, "skills": ALL_SKILLS}
+
+
+def _tokenize_role_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9+#.]+", text.lower()) if len(w) >= 2}
+
+
+def _category_vocab(cat: dict) -> set[str]:
+    """A category's own human-facing role vocabulary — its label plus every
+    target_role phrase — as a token set. Deliberately NOT the snake_case
+    dict key: 'product' and 'ai' never appear in any key (ui_ux_designer,
+    product_manager, ...) but very much appear in real role labels
+    ('Product Designer', 'AI Engineer'), which is exactly what let a
+    Product Designer job pass a developer's category gate on 'product'
+    alone (2026-07 production incident, Kevin's profile)."""
+    return _tokenize_role_words(cat["label"] + " " + " ".join(cat["target_roles"]))
+
+
+# A word counts as "generic" the moment it belongs to MORE THAN ONE
+# category's real role vocabulary — computed mechanically from
+# JOB_CATEGORIES itself, not a hand-maintained list. This is the single
+# shared source of truth for "this word alone doesn't prove which
+# profession a job belongs to": both core/matcher.py's match-time gate and
+# jobs/fetchers.py's fetch-time title filter import this SAME set, so a
+# future ambiguous word (e.g. 'writer', shared by ui_ux_designer's "UX
+# Writer" and content_writer's "UX Writer"/"Content Writer") is caught in
+# both places automatically the moment it exists in the data — no risk of
+# one file getting a word-list update the other doesn't.
+_CATEGORY_VOCABS = [_category_vocab(cat) for cat in JOB_CATEGORIES.values()]
+GENERIC_ROLE_WORDS: set[str] = {
+    word
+    for vocab in _CATEGORY_VOCABS
+    for word in vocab
+    if sum(1 for v in _CATEGORY_VOCABS if word in v) > 1
+}
 
 
 def suggest(field: str, query: str, limit: int = 20) -> list[str]:

@@ -5,12 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>{{ user_name }} — Resume</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
+    /* No @import for the Google Fonts stack here on purpose — WeasyPrint
+       fetches @import'd stylesheets synchronously at render time, so any
+       network hiccup on the render host throws and fails the PDF for a
+       reason with nothing to do with the resume content. The system sans
+       fallback below (DejaVu Sans is installed via nixpacks.toml
+       specifically for this) renders fine without it. */
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       font-size: 10.5pt;
       color: #1a1a2e;
       background: #fff;

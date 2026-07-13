@@ -29,7 +29,7 @@ from datetime import date
 
 from core.ai import get_ai_provider
 from core.config import get_settings
-from core.skill_maps import JOB_CATEGORIES
+from core.skill_maps import JOB_CATEGORIES, GENERIC_ROLE_WORDS
 from database.supabase_client import get_supabase
 # Safe import direction: jobs.fetchers never imports core.matcher.
 from jobs.fetchers import experience_months_from_text
@@ -38,25 +38,22 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-def _tokenize_category_name(category_key: str) -> set[str]:
-    return {w for w in re.findall(r"[a-z0-9+#.]+", category_key.replace("_", " ").lower()) if len(w) >= 2}
-
-
-# Words like "designer"/"developer"/"engineer"/"manager" appear in MORE THAN
-# ONE job_category name (ui_ux_designer AND graphic_designer both contain
-# "designer"; frontend/backend/fullstack/mobile_developer all contain
-# "developer"). A single shared word is not evidence a job is in the RIGHT
-# one of those professions — without this exclusion, an untagged Graphic
-# Designer job's title passes the UI/UX category gate on "designer" alone
-# (same for e.g. a Backend Developer job under a Frontend Developer user).
-# Only affects the untagged-job text-fallback path in _category_relevant;
-# jobs with a real search_category tag are matched exactly, unaffected.
-_GENERIC_ROLE_NOUNS = {
-    word
-    for key in JOB_CATEGORIES
-    for word in _tokenize_category_name(key)
-    if sum(1 for k2 in JOB_CATEGORIES if word in _tokenize_category_name(k2)) > 1
-}
+# Words like "designer"/"developer"/"engineer"/"manager"/"product" appear in
+# MORE THAN ONE job_category's real role vocabulary (ui_ux_designer's
+# "Product Designer" AND product_manager's "Product Manager" both contain
+# "product"; ui_ux_designer AND graphic_designer both contain "designer").
+# A single shared word is not evidence a job is in the RIGHT one of those
+# professions — without this exclusion, an untagged Product Designer job's
+# title passes a developer's category gate on "product" alone (2026-07
+# production incident: Kevin's profile). GENERIC_ROLE_WORDS is imported
+# from core/skill_maps.py rather than computed here so this exclusion and
+# jobs/fetchers.py's fetch-time title filter share ONE mechanically-derived
+# set — the previous version of this fix lived only in fetchers.py's own
+# hand-maintained word list and was never ported here, which is exactly how
+# "product" caused the same leak twice. Only affects the untagged-job
+# text-fallback path in _category_relevant; jobs with a real search_category
+# tag are matched exactly, unaffected.
+_GENERIC_ROLE_NOUNS = GENERIC_ROLE_WORDS
 
 # Words so common in ANY job's text that they carry zero category signal —
 # "it" (from e.g. a "Technical IT Engineer" target role) is literally the
@@ -124,13 +121,17 @@ def _category_relevant(job: dict, user_categories: set[str], category_terms: set
         return True  # nothing to check against — don't blanket-exclude
     # Generic multi-category nouns ("designer", "developer", ...) and
     # no-signal stopwords ("it", "technical", ...) can't clear either gate
-    # — see _GENERIC_ROLE_NOUNS / _GATE_STOPWORDS above.
+    # alone — see _GENERIC_ROLE_NOUNS / _GATE_STOPWORDS above.
     specific_terms = category_terms - _GENERIC_ROLE_NOUNS - _GATE_STOPWORDS
     title_words = _tokenize(job.get("title", ""))
     desc_words = _tokenize(job.get("description", ""))
     if not specific_terms:
         # Every gating term was generic (e.g. "data engineer" — both words
-        # multi-category). The weak full-set check beats blanket-passing.
+        # multi-category, or a category like ui_ux_designer whose own
+        # label "UI/UX Designer" tokenizes entirely into words that are
+        # ALSO real target_roles of other categories). No single word here
+        # is safe alone — the weak full-set 2-co-occurrence check (same
+        # bar as the description fallback below) beats blanket-passing.
         return len((category_terms - _GATE_STOPWORDS) & desc_words) >= 2
     if specific_terms & title_words:
         return True

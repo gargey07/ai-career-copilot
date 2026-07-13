@@ -147,13 +147,18 @@ class Settings(BaseSettings):
     # onboarding), so still worth a sane per-IP daily ceiling.
     resume_preview_daily_limit_per_ip: int = 200
 
-    # PDF rendering engine: 'chromium' (Playwright, the long-standing
-    # default) or 'weasyprint' (pure-Python, ~10x lighter on RAM, needs
-    # pango/cairo system libs). Set PDF_ENGINE=weasyprint on the server to
-    # switch after eyeballing live output; unsetting rolls straight back.
-    # A weasyprint failure at render time falls back to chromium for that
-    # PDF rather than failing the generation.
-    pdf_engine: str = "chromium"
+    # PDF rendering engine: 'weasyprint' (pure-Python, ~10x lighter on RAM,
+    # needs pango/cairo system libs) or 'chromium' (Playwright). Defaults to
+    # weasyprint because nixpacks.toml — the actual production build recipe
+    # — installs ONLY WeasyPrint's system libraries and deliberately omits
+    # Chromium's ~40; defaulting to chromium here would silently break every
+    # PDF render the moment PDF_ENGINE is unset/dropped on the server (this
+    # happened after the Render->Coolify/VPS migration). Local dev machines
+    # that have Playwright's browser installed can opt into
+    # PDF_ENGINE=chromium explicitly. A weasyprint failure at render time
+    # still falls back to chromium for that PDF rather than failing the
+    # generation outright.
+    pdf_engine: str = "weasyprint"
 
     # Shared secret to authorize the manual pipeline trigger (POST /api/admin/run-pipeline).
     # Empty = trigger disabled (safe default). Set ADMIN_TOKEN on the server to enable.

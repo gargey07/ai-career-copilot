@@ -508,6 +508,18 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
     except Exception:
         pass
 
+    # PDF engine diagnostic — same raw-vs-validated pattern as the API-key
+    # checks above: settings.pdf_engine is what the app is ACTUALLY using
+    # (post-strip, post-default); raw_env_length distinguishes "PDF_ENGINE
+    # isn't set at all on this container" (None) from "set but empty" (0)
+    # from "set correctly" (nonzero). This is exactly the class of bug that
+    # broke PDF rendering silently after the Render->Coolify/VPS migration —
+    # visible here at a glance instead of requiring a support thread.
+    pdf_engine_diagnostic = {
+        "configured": settings.pdf_engine,
+        "raw_env_length": _raw_env_length("pdf_engine"),
+    }
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "usage_date": today,
@@ -520,6 +532,7 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
         },
         "funnel": funnel,
         "api_usage": api_usage,
+        "pdf_engine": pdf_engine_diagnostic,
         "users": user_rows,
         "email_history": email_history,
     }

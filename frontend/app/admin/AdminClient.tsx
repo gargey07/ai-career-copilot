@@ -81,12 +81,17 @@ interface EmailLogRow {
   error_message: string | null;
   sent_at: string | null;
 }
+interface PdfEngineDiagnostic {
+  configured: string;
+  raw_env_length: number | null;
+}
 interface Overview {
   generated_at: string;
   usage_date: string;
   totals: { users: number; active_users: number; jobs_in_pool: number; matches_delivered: number; apply_clicks: number };
   funnel: Funnel;
   api_usage: ApiUsageRow[];
+  pdf_engine?: PdfEngineDiagnostic;
   users: AdminUserRow[];
   email_history?: EmailLogRow[];
 }
@@ -352,7 +357,7 @@ interface PdfFailureRow {
   updated_at: string | null;
 }
 
-function PdfFailuresPanel({ token }: { token: string }) {
+function PdfFailuresPanel({ token, pdfEngine }: { token: string; pdfEngine?: PdfEngineDiagnostic }) {
   const [rows, setRows] = useState<PdfFailureRow[] | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -380,6 +385,7 @@ function PdfFailuresPanel({ token }: { token: string }) {
         </Button>
       }
     >
+      <PdfEngineBadge diagnostic={pdfEngine} />
       {rows === null ? (
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           Click &quot;Check now&quot; to pull the most recent pdf_failed matches and their stored error text —
@@ -407,6 +413,31 @@ function PdfFailuresPanel({ token }: { token: string }) {
         </div>
       )}
     </SectionCard>
+  );
+}
+
+// The exact diagnostic behind "PDF_ENGINE isn't set / got dropped in a
+// migration" — same raw-vs-configured distinction as the API-key checks,
+// surfaced at a glance instead of requiring a SQL query or log access.
+function PdfEngineBadge({ diagnostic }: { diagnostic?: PdfEngineDiagnostic }) {
+  if (!diagnostic) return null;
+  const isWeasyprint = diagnostic.configured === "weasyprint";
+  const envMissing = diagnostic.raw_env_length == null;
+  const style = isWeasyprint
+    ? { bg: "#DCFCE7", color: "#15803D", border: "#BBF7D0" }
+    : { bg: "#FEE2E2", color: "#B91C1C", border: "#FECACA" };
+  return (
+    <div className="flex items-center gap-2 mb-4 text-xs">
+      <span className="px-2 py-0.5 rounded-full font-semibold" style={{ background: style.bg, color: style.color, border: `1px solid ${style.border}` }}>
+        PDF engine: {diagnostic.configured}
+      </span>
+      <span style={{ color: "var(--text-muted)" }}>
+        {envMissing
+          ? "PDF_ENGINE is not set on this server — using the code default."
+          : `PDF_ENGINE is set (${diagnostic.raw_env_length} chars) on this server.`}
+        {!isWeasyprint && " Chromium's system libraries are not installed in production — this will fail every PDF render."}
+      </span>
+    </div>
   );
 }
 
@@ -627,7 +658,7 @@ export default function AdminClient() {
               )}
             </SectionCard>
 
-            <PdfFailuresPanel token={token} />
+            <PdfFailuresPanel token={token} pdfEngine={overview.pdf_engine} />
 
             {/* Users */}
             <SectionCard icon={Users} title="Users">

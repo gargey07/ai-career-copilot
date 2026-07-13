@@ -18,6 +18,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from core.config import get_settings
 from core.locations import ADZUNA_COUNTRIES, resolve_fetch_location
+from core.skill_maps import GENERIC_ROLE_WORDS
 from core.usage_guard import check_budget
 from database.supabase_client import get_supabase
 
@@ -111,13 +112,18 @@ def normalize_job(
 _STOPWORDS = {"the", "and", "for", "with", "job", "jobs", "role", "roles", "senior", "junior"}
 
 # Qualifier words that prefix MANY unrelated professions — "product" alone
-# can't tell "Product Manager" from "Product Designer" apart; same idea as
-# core/matcher.py's _GATE_STOPWORDS, but this is fetchers.py's OWN simpler
-# query-vs-title check, not matcher.py's category gate (different code,
-# needed its own copy — importing matcher.py here would create a circular
-# import, since matcher.py already imports from this module).
-_QUALIFIER_WORDS = {
-    "product", "digital", "content", "technical", "creative",
+# can't tell "Product Manager" from "Product Designer" apart. GENERIC_ROLE_WORDS
+# (core/skill_maps.py) is mechanically derived from every category's real role
+# vocabulary and shared with core/matcher.py's category gate — importing it
+# here (not matcher.py itself, which WOULD be circular since matcher.py
+# imports from this module) means a newly-ambiguous word only needs to exist
+# in the category data to be excluded everywhere, instead of being hand-added
+# to two separate word lists that can silently drift apart (exactly how
+# "product" got fixed here once but not in matcher.py, causing the same leak
+# to resurface on the dashboard). A few pure seniority/scope qualifiers that
+# don't come from any category's target_roles at all are unioned in on top.
+_QUALIFIER_WORDS = GENERIC_ROLE_WORDS | {
+    "digital", "content", "technical", "creative",
     "associate", "principal", "staff", "chief", "global", "regional",
 }
 
@@ -140,15 +146,26 @@ def _title_matches(title: str, query: str) -> bool:
     design job requiring "3+ years of UX/UI design experience" (a live
     production bug). Qualifier words are excluded from what counts as a
     match — "Product Manager" needs "manager" specifically, not just any
-    shared prefix word — falling back to the full term set only if every
-    term happened to be a qualifier (never blanket-reject a real query).
+    shared prefix word.
+
+    Many real queries are TWO qualifier words together ("Product Manager",
+    "UI UX Designer", "Data Engineer" — every word individually ambiguous
+    across professions, e.g. "manager" alone spans Product/Project/Account/
+    HR Manager). When that leaves zero specific terms, falling back to
+    "match ANY of the original words" would accept a title on "product"
+    alone again — the exact bug this function exists to prevent. Instead
+    require ALL of the original query words (a phrase-level AND) — "Product
+    Manager" still matches "Senior Product Manager" (both words present)
+    but not a title with only one of them.
     """
     terms = _query_terms(query)
     if not terms:
         return True
     title_words = set(re.findall(r"[a-z0-9+#]+", (title or "").lower()))
-    specific_terms = [t for t in terms if t not in _QUALIFIER_WORDS] or terms
-    return any(term in title_words for term in specific_terms)
+    specific_terms = [t for t in terms if t not in _QUALIFIER_WORDS]
+    if specific_terms:
+        return any(term in title_words for term in specific_terms)
+    return all(term in title_words for term in terms)
 
 
 # ── Adzuna Fetcher ────────────────────────────────────────────────────────────

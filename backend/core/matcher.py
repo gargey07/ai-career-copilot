@@ -222,16 +222,40 @@ def _experience_ok(job: dict, user_level: str) -> bool:
     return job_idx - _USER_BAND_INDEX[level] < 2
 
 
+# A fresher/entry/junior user's job_idx is 0 — _apply_experience_penalty's
+# down-level branch never fires for them (nothing is below the bottom
+# band), so without this they had no defense against jobs with NO
+# experience signal at all outranking jobs we're actually confident fit.
+# Milder than _EXPERIENCE_DOWNLEVEL_PENALTY on purpose: a downlevel job is
+# CONFIRMED too easy for the user; an unknown-experience job might be
+# perfectly fine — matcher.py's documented policy is "unknown is not
+# disqualified," so this only reorders, it never excludes.
+_UNKNOWN_EXPERIENCE_PENALTY = 0.85
+
+
 def _apply_experience_penalty(jobs: list[dict], user_level: str) -> list[dict]:
-    """Post-scoring nudge: a job 2+ bands BELOW the user gets its score
-    multiplied down (never dropped — a senior may genuinely want it)."""
-    user_idx = _USER_BAND_INDEX.get((user_level or "").strip().lower())
-    if not user_idx:  # unknown level or already the bottom band
+    """
+    Post-scoring nudge, two directions:
+    - A job 2+ bands BELOW the user gets its score multiplied down (never
+      dropped — a senior may genuinely want it).
+    - For fresher/entry/junior users specifically, a job with NO
+      experience signal at all (neither parsed required_experience_months
+      nor an inferred seniority_level — see jobs/fetchers.py's
+      infer_seniority_level) gets the milder _UNKNOWN_EXPERIENCE_PENALTY.
+      This is what a fresher's dashboard actually shows more of: jobs
+      confidently within their band, ranked above jobs we simply have no
+      data on, rather than the two being indistinguishable in the list.
+    """
+    level = (user_level or "").strip().lower()
+    user_idx = _USER_BAND_INDEX.get(level)
+    if user_idx is None:  # unrecognized level — never filtered or penalized
         return jobs
     for j in jobs:
         job_idx = _job_band_index(j)
         if job_idx is not None and user_idx - min(job_idx, 2) >= 2:
             j["match_score"] = round((j.get("match_score") or 0) * _EXPERIENCE_DOWNLEVEL_PENALTY, 4)
+        elif user_idx == 0 and job_idx is None:
+            j["match_score"] = round((j.get("match_score") or 0) * _UNKNOWN_EXPERIENCE_PENALTY, 4)
     return jobs
 
 

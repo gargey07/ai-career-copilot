@@ -108,13 +108,77 @@ async def _backfill_experience() -> None:
 async def backfill_experience_now(background_tasks: BackgroundTasks, token: str = Query(..., description="Admin token")):
     """Parse experience requirements from existing jobs' descriptions in
     the background. Run once after the required_experience_months
-    migration; safe to re-run."""
+    migration; safe to re-run. Also worth re-running any time
+    experience_months_from_text's regex is improved (2026-07: widened to
+    catch phrasings like "5+ years in a similar role" that don't contain
+    the word "experience") — it only touches rows still NULL, so it picks
+    up newly-parseable jobs without re-processing settled ones."""
     _require_admin(token)
     background_tasks.add_task(_audit, "experience_backfill_triggered")
     background_tasks.add_task(_backfill_experience)
     return {
         "status": "started",
         "message": "Backfilling experience data from job descriptions in the background — check the server log for the summary line.",
+    }
+
+
+async def _backfill_seniority() -> None:
+    """One-time-ish, same pattern as _backfill_experience: infer
+    seniority_level from the title for every stored job that has none.
+    Adzuna/Remotive/Greenhouse/Jobicy never set this column at fetch time
+    (only JSearch did, historically) — without this backfill, the
+    experience gate's seniority-fallback path (core/matcher.py
+    _job_band_index) treats every one of those jobs as fully unknown,
+    which is more permissive than it needs to be for jobs whose title
+    plainly says "Senior"/"Junior"/etc. Idempotent: already-filled rows
+    are never touched."""
+    from jobs.fetchers import infer_seniority_level
+
+    supabase = get_supabase()
+    updated = scanned = 0
+    page_size = 200
+    offset = 0
+    try:
+        while True:
+            resp = (
+                supabase.table("jobs")
+                .select("id, title")
+                .is_("seniority_level", "null")
+                .order("collected_at", desc=True)
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            rows = resp.data or []
+            if not rows:
+                break
+            for row in rows:
+                scanned += 1
+                level = infer_seniority_level(row.get("title") or "")
+                if level:
+                    supabase.table("jobs").update(
+                        {"seniority_level": level}
+                    ).eq("id", row["id"]).execute()
+                    updated += 1
+            if len(rows) < page_size:
+                break
+            offset += page_size
+        logger.info(f"✅ Seniority backfill: {updated}/{scanned} NULL-seniority jobs got an inferred level")
+    except Exception as e:
+        logger.error(f"❌ Seniority backfill failed after {updated}/{scanned}: {e}")
+
+
+@router.post("/backfill-seniority")
+async def backfill_seniority_now(background_tasks: BackgroundTasks, token: str = Query(..., description="Admin token")):
+    """Infer seniority_level from title for existing jobs that don't have
+    one, in the background. Run once after deploying the shared
+    infer_seniority_level() (2026-07 experience-filtering fix); safe to
+    re-run — only NULL rows are touched."""
+    _require_admin(token)
+    background_tasks.add_task(_audit, "seniority_backfill_triggered")
+    background_tasks.add_task(_backfill_seniority)
+    return {
+        "status": "started",
+        "message": "Backfilling seniority level from job titles in the background — check the server log for the summary line.",
     }
 
 

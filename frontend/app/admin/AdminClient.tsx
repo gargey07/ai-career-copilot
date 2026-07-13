@@ -531,20 +531,25 @@ export default function AdminClient() {
     if (saved) load(saved);
   }, [load]);
 
-  const runPipeline = async () => {
+  // Shared by "Run pipeline now" and the two backfill triggers below — all
+  // three are the same shape (POST, background job, one status message).
+  const runAdminAction = async (endpoint: string, fallbackMsg: string) => {
     setPipelineRunning(true);
     setPipelineMsg("");
     try {
-      const res = await fetch(`${API_URL}/api/admin/run-pipeline?token=${encodeURIComponent(token)}`, { method: "POST" });
+      const res = await fetch(`${API_URL}/api/admin/${endpoint}?token=${encodeURIComponent(token)}`, { method: "POST" });
       const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.detail || "Couldn't start the pipeline.");
-      setPipelineMsg(body.message || "Pipeline started.");
+      if (!res.ok) throw new Error(body.detail || fallbackMsg);
+      setPipelineMsg(body.message || "Started.");
     } catch (e: any) {
-      setPipelineMsg(e.message || "Couldn't start the pipeline.");
+      setPipelineMsg(e.message || fallbackMsg);
     } finally {
       setPipelineRunning(false);
     }
   };
+  const runPipeline = () => runAdminAction("run-pipeline", "Couldn't start the pipeline.");
+  const backfillExperience = () => runAdminAction("backfill-experience", "Couldn't start the experience backfill.");
+  const backfillSeniority = () => runAdminAction("backfill-seniority", "Couldn't start the seniority backfill.");
 
   // ── Locked state: ask for the token ──────────────────────────────────────────
   if (!token && !loading) {
@@ -640,10 +645,19 @@ export default function AdminClient() {
               icon={Gauge}
               title={`API usage today (${overview.usage_date})`}
               action={
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <Button variant="secondary" onClick={runPipeline} disabled={pipelineRunning}>
                     <Play size={15} strokeWidth={1.75} />
                     {pipelineRunning ? "Starting…" : "Run pipeline now"}
+                  </Button>
+                  {/* One-time-ish backfills for the existing job pool — safe to
+                      re-run (only touches NULL rows). Re-run experience after
+                      any change to experience_months_from_text's regex. */}
+                  <Button variant="secondary" onClick={backfillExperience} disabled={pipelineRunning}>
+                    Backfill experience
+                  </Button>
+                  <Button variant="secondary" onClick={backfillSeniority} disabled={pipelineRunning}>
+                    Backfill seniority
                   </Button>
                 </div>
               }

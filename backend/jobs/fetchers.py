@@ -31,9 +31,43 @@ settings = get_settings()
 # below is what makes this safe to run on whole descriptions: "2+ years of
 # experience" counts, "founded 25 years ago" does not.
 _YEARS_RE = re.compile(r"(\d{1,2})\s*(?:\+|\s*(?:-|–|to)\s*\d{1,2})?\s*(?:years?|yrs?)\b", re.IGNORECASE)
-_EXPERIENCE_CONTEXT_RE = re.compile(r"\bexp(?:erience|\b|\.)", re.IGNORECASE)
-_EXPERIENCE_CONTEXT_WINDOW = 60  # chars each side of a "N years" hit
+
+# 2026-07: a fresher/entry user (0-1 yrs) kept seeing plainly-titled "7+
+# years" jobs. Traced to this context check being too narrow — real
+# requirement phrasing very often doesn't put the literal word
+# "experience"/"exp" near the number ("5+ years in a similar role",
+# "minimum 5 years", "3-5 years building production systems"), so it
+# silently parsed to None and fell through to the (much weaker) seniority-
+# band fallback. Kept as a POSITIVE-anchor allowlist rather than switching
+# to a blacklist of company-age words ("founded 25 years ago") — an
+# allowlist can only miss real requirements (safe direction), a blacklist
+# could newly accept a company-history mention that happens not to use any
+# of those specific words (unsafe direction: a false requirement gate).
+_EXPERIENCE_CONTEXT_RE = re.compile(
+    r"\bexp(?:erience|\b|\.)"
+    r"|\byears?\s+(?:in|of|working|building)\b"
+    r"|\byoe\b"
+    r"|\b(?:minimum|min\.?|at\s+least)\b"
+    r"|\bbackground\s+in\b"
+    r"|\btrack\s+record\b"
+    r"|\b(?:proven|professional|relevant|industry|hands-on|practical|prior)\b"
+    r"|\brequir(?:ed|ement)\b",
+    re.IGNORECASE,
+)
+# Wide enough to span a "Requirements:" bullet where the anchor word sits
+# in a heading or an adjacent line, not literally next to the number.
+_EXPERIENCE_CONTEXT_WINDOW = 100  # chars each side of a "N years" hit
 _MAX_PLAUSIBLE_YEARS = 40
+
+# Spelled-out numbers ("at least three years") — same anchor-context rule
+# applies, just matched as words instead of digits.
+_WORD_NUMBERS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+_WORD_YEARS_RE = re.compile(
+    r"\b(" + "|".join(_WORD_NUMBERS) + r")\s*(?:years?|yrs?)\b", re.IGNORECASE
+)
 
 
 def experience_months_from_text(text: str) -> Optional[int]:
@@ -41,21 +75,67 @@ def experience_months_from_text(text: str) -> Optional[int]:
     Minimum required experience (in months) stated in a job description,
     or None when nothing credible is found. Takes the LOWEST qualifying
     number — "2-4 years" and "2+ years" both mean a 2-year floor. Only
-    counts a "N years" mention with the word "experience" nearby, so
-    marketing copy ("serving clients for 15 years") doesn't poison it.
+    counts a "N years" mention with a requirement-shaped word nearby (see
+    _EXPERIENCE_CONTEXT_RE), so marketing copy ("serving clients for 15
+    years") doesn't poison it.
     """
     if not text:
         return None
     years_found: list[int] = []
+
+    def _context_ok(start_idx: int, end_idx: int) -> bool:
+        start = max(0, start_idx - _EXPERIENCE_CONTEXT_WINDOW)
+        end = min(len(text), end_idx + _EXPERIENCE_CONTEXT_WINDOW)
+        return bool(_EXPERIENCE_CONTEXT_RE.search(text[start:end]))
+
     for m in _YEARS_RE.finditer(text):
         years = int(m.group(1))
         if years == 0 or years > _MAX_PLAUSIBLE_YEARS:
             continue
-        start = max(0, m.start() - _EXPERIENCE_CONTEXT_WINDOW)
-        end = min(len(text), m.end() + _EXPERIENCE_CONTEXT_WINDOW)
-        if _EXPERIENCE_CONTEXT_RE.search(text[start:end]):
+        if _context_ok(m.start(), m.end()):
             years_found.append(years)
+
+    for m in _WORD_YEARS_RE.finditer(text):
+        years = _WORD_NUMBERS[m.group(1).lower()]
+        if _context_ok(m.start(), m.end()):
+            years_found.append(years)
+
     return min(years_found) * 12 if years_found else None
+
+
+# ── Seniority inference from title ────────────────────────────────────────────
+_SENIOR_TITLE_RE = re.compile(r"\b(senior|sr\.?|staff|principal|architect|iii|iv)\b", re.IGNORECASE)
+_LEAD_TITLE_RE = re.compile(r"\blead\b", re.IGNORECASE)
+_ENTRY_TITLE_RE = re.compile(r"\b(junior|jr\.?|intern|fresher|entry[\s-]?level|graduate|trainee|i)\b", re.IGNORECASE)
+
+
+def infer_seniority_level(title: str) -> Optional[str]:
+    """
+    Best-effort seniority band from a job TITLE alone. Only JSearch's API
+    provides a structured seniority field — every other source needs this
+    fallback, and JSearch itself falls back to it too when its own title
+    doesn't say senior/lead/entry.
+
+    Returns None — never a guessed default — when the title gives no
+    confident signal. An earlier version of this defaulted every
+    unmatched title to "mid", and that fake label was WORSE than no label
+    at all: matcher.py's band-distance check treats "mid" as close enough
+    to pass a fresher/entry user straight through, so a plainly-titled
+    "Software Engineer" requiring 7 years (title says nothing about
+    seniority) was being waved through on a guess dressed up as data.
+    matcher.py already has a deliberate, documented "unknown passes"
+    policy for genuinely missing data — a wrong "mid" bypassed even that.
+    """
+    if not title:
+        return None
+    t = title.lower()
+    if _SENIOR_TITLE_RE.search(t):
+        return "senior"
+    if _LEAD_TITLE_RE.search(t):
+        return "lead"
+    if _ENTRY_TITLE_RE.search(t):
+        return "entry"
+    return None
 
 
 # ── Normalized Job Schema ─────────────────────────────────────────────────────
@@ -80,9 +160,16 @@ def normalize_job(
     required_experience_months: structured value when the source provides
     one (only JSearch does); otherwise parsed from the description here so
     every source gets the same treatment. None means "unknown" — the
-    matcher treats that as unfilterable, never as "no requirement"."""
+    matcher treats that as unfilterable, never as "no requirement".
+
+    seniority_level: same idea — inferred from the title here (previously
+    only JSearch's fetch loop computed this, leaving Adzuna/Remotive/
+    Greenhouse/Jobicy jobs with no signal at all for the experience gate's
+    fallback path)."""
     if required_experience_months is None:
         required_experience_months = experience_months_from_text(description or "")
+    if seniority_level is None:
+        seniority_level = infer_seniority_level(title)
     return {
         "source": source,
         "external_id": str(external_id),
@@ -288,13 +375,6 @@ class JSearchFetcher:
                         # term in the title -> never stored, never stamped.
                         if not _title_matches(job.get("job_title", ""), query):
                             continue
-                        title_lower = job.get("job_title", "").lower()
-                        seniority = (
-                            "senior" if "senior" in title_lower else
-                            "lead" if "lead" in title_lower else
-                            "entry" if any(w in title_lower for w in ("junior", "intern", "fresher")) else
-                            "mid"
-                        )
                         apply_url = job.get("job_apply_link") or job.get("job_url") or ""
                         # JSearch is the one source with a structured
                         # experience field — prefer it over description
@@ -315,7 +395,6 @@ class JSearchFetcher:
                             salary_min=job.get("job_min_salary"),
                             salary_max=job.get("job_max_salary"),
                             employment_type=job.get("job_employment_type"),
-                            seniority_level=seniority,
                             is_remote=job.get("job_is_remote", False),
                             posted_at=job.get("job_posted_at_datetime_utc"),
                             required_experience_months=req_exp,

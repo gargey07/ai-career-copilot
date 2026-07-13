@@ -9,8 +9,15 @@
 # Chromium's dependency list is deliberately NOT baked in — chromium remains
 # the local/dev engine; the server runs WeasyPrint. fonts-dejavu-core gives
 # text rendering a sane default font.
+# NOTE (2026-07-13): the live "cannot load library 'libgobject-2.0-0'"
+# failure proved Coolify's build was NOT applying this file at all (glib is
+# a hard dependency of libpango — it would exist if this list had run).
+# backend/Dockerfile is now the intended production build; switch Coolify's
+# Build Pack to Dockerfile. This file stays as a fallback for any future
+# Nixpacks-based deploy, with libglib2.0-0 spelled out explicitly.
 [phases.setup]
 aptPkgs = [
+  "libglib2.0-0",
   "libpango-1.0-0",
   "libpangoft2-1.0-0",
   "libpangocairo-1.0-0",

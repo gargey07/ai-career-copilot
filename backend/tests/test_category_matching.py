@@ -27,8 +27,10 @@ correct single-role matches for a much larger population of users.
 """
 from __future__ import annotations
 
+import asyncio
+
 import core.matcher as matcher
-from core.matcher import _category_relevant, _tokenize
+from core.matcher import _category_relevant, _tokenize, purge_miscategorized_matches
 from core.skill_maps import JOB_CATEGORIES, GENERIC_ROLE_WORDS
 from jobs.fetchers import _title_matches
 
@@ -165,3 +167,99 @@ def test_fetch_time_filter_every_query_self_matches():
 
 def test_fetch_time_filter_rejects_unrelated_developer_role():
     assert _title_matches("Backend Developer", "React Developer") is False
+
+
+# ── purge_miscategorized_matches — self-healing for HISTORICAL leaks ──────────
+# The gate only filters NEW candidates; leaked rows that already progressed
+# (pdf_failed/emailed, older digest dates) sat on the dashboard forever —
+# exactly why Kevin still saw Product Designer cards after the gate fix.
+class _Resp:
+    def __init__(self, data):
+        self.data = data
+
+
+class _PurgeFakeSupabase:
+    """Just enough of the query chain for purge_miscategorized_matches."""
+
+    def __init__(self, rows, select_error=None, delete_error=None):
+        self.rows = rows
+        self.select_error = select_error
+        self.delete_error = delete_error
+        self.deleted_ids: list[str] | None = None
+
+    def table(self, name):
+        return self
+
+    def select(self, *a, **k):
+        self._op = "select"
+        return self
+
+    def delete(self):
+        self._op = "delete"
+        return self
+
+    def eq(self, col, val):
+        return self
+
+    def in_(self, col, ids):
+        self._ids = ids
+        return self
+
+    def execute(self):
+        if self._op == "select":
+            if self.select_error:
+                raise self.select_error
+            return _Resp(self.rows)
+        if self.delete_error:
+            raise self.delete_error
+        self.deleted_ids = list(self._ids)
+        return _Resp([])
+
+
+def _purge_rows():
+    """One leaked design job in every protection state + two keepers."""
+    design_job = {"title": "Product Designer, AI Models", "description": "Figma, UX research.", "search_category": "ui_ux_designer"}
+    dev_job = {"title": "Senior Fullstack Developer", "description": "Node.js, React.", "search_category": "fullstack_developer"}
+    return [
+        {"id": "leak-plain", "status": "pdf_failed", "applied_at": None, "application_status": None, "feedback": None, "job_feedback": None, "jobs": design_job},
+        {"id": "leak-applied-status", "status": "applied", "applied_at": None, "application_status": None, "feedback": None, "job_feedback": None, "jobs": design_job},
+        {"id": "leak-applied-at", "status": "emailed", "applied_at": "2026-07-10", "application_status": None, "feedback": None, "job_feedback": None, "jobs": design_job},
+        {"id": "leak-feedback", "status": "emailed", "applied_at": None, "application_status": None, "feedback": None, "job_feedback": "not_relevant", "jobs": design_job},
+        {"id": "keep-in-category", "status": "pdf_ready", "applied_at": None, "application_status": None, "feedback": None, "job_feedback": None, "jobs": dev_job},
+        {"id": "keep-no-job", "status": "matched", "applied_at": None, "application_status": None, "feedback": None, "job_feedback": None, "jobs": None},
+    ]
+
+
+def _run_purge(db):
+    return asyncio.run(purge_miscategorized_matches(
+        db, "kevin", {"fullstack_developer"}, _category_terms_for("fullstack_developer"),
+    ))
+
+
+def test_purge_removes_leaked_rows_but_keeps_protected_and_relevant_ones():
+    db = _PurgeFakeSupabase(_purge_rows())
+    removed = _run_purge(db)
+    assert removed == 1
+    # Only the plain leaked row goes: applied/feedback rows are protected
+    # (user signals), the in-category row passes the gate, and a row whose
+    # job can't be loaded is never judged.
+    assert db.deleted_ids == ["leak-plain"]
+
+
+def test_purge_never_blocks_matching_on_select_failure():
+    db = _PurgeFakeSupabase([], select_error=RuntimeError("column does not exist"))
+    assert _run_purge(db) == 0
+
+
+def test_purge_never_blocks_matching_on_delete_failure():
+    db = _PurgeFakeSupabase(_purge_rows(), delete_error=RuntimeError("permission denied"))
+    assert _run_purge(db) == 0
+
+
+def test_purge_noop_when_everything_is_relevant():
+    dev_job = {"title": "Python Developer", "description": "FastAPI.", "search_category": "fullstack_developer"}
+    db = _PurgeFakeSupabase([
+        {"id": "m1", "status": "emailed", "applied_at": None, "application_status": None, "feedback": None, "job_feedback": None, "jobs": dev_job},
+    ])
+    assert _run_purge(db) == 0
+    assert db.deleted_ids is None  # delete never called

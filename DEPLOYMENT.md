@@ -1,4 +1,26 @@
-# Render Deployment Guide — AI Career Copilot Backend
+# Deployment Guide — AI Career Copilot Backend
+
+## CURRENT: Coolify on the Hostinger VPS (since 2026-07-10)
+
+The backend now deploys via Coolify. **Build Pack must be set to
+`Dockerfile`** (backend app → Build → Build Pack), base directory
+`/backend` — the Dockerfile is at `backend/Dockerfile`.
+
+Why Dockerfile and not Nixpacks: the 2026-07-13 production incident.
+Every PDF render failed with `cannot load library 'libgobject-2.0-0'`,
+which proved Nixpacks was silently ignoring `backend/nixpacks.toml`'s
+apt packages (glib is a hard dependency of libpango — it would have been
+present if that phase had run). The Dockerfile installs WeasyPrint's
+system libraries explicitly; after switching, confirm the
+`apt-get install … libglib2.0-0 …` layer appears in the Coolify build
+log. Chromium is deliberately not installed — WeasyPrint is the
+production PDF engine (`PDF_ENGINE` defaults to `weasyprint`).
+
+Everything below is the old Render guide, kept for reference.
+
+---
+
+# Render Deployment Guide (HISTORICAL — migrated off 2026-07-10)
 
 ## Overview
 

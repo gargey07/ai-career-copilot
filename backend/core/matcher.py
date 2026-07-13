@@ -382,6 +382,72 @@ _OVERFETCH_MULTIPLIER = 5
 _OVERFETCH_CAP = 100
 
 
+# Statuses that mean the USER acted on a match — purge never touches these.
+_PURGE_PROTECTED_STATUSES = {"applied", "interviewing", "offered"}
+
+
+async def purge_miscategorized_matches(
+    supabase, user_id: str, user_categories: set[str], category_terms: set[str]
+) -> int:
+    """
+    Self-healing cleanup for HISTORICAL category leaks (2026-07: Kevin's
+    developer dashboard kept showing Product Designer jobs even after the
+    gate was fixed). The gate only filters NEW candidates; the dashboard
+    shows every stored user_jobs row regardless of date, and
+    store_matches' stale-row cleanup only removes TODAY's still-'matched'
+    rows — so a leaked row that progressed (resume generated, pdf_failed,
+    emailed) would otherwise sit on the dashboard forever.
+
+    Re-runs the exact same _category_relevant gate over ALL of the user's
+    stored matches and deletes the ones that no longer pass, EXCEPT rows
+    the user has acted on (applied/interviewing/offered, an applied_at or
+    application_status value, or any feedback — feedback rows feed the
+    personalization penalties and must survive).
+
+    Best-effort: any failure logs and returns 0 — cleanup must never block
+    matching (same contract as _load_relevance_penalties). Returns the
+    number of rows removed.
+    """
+    try:
+        resp = (
+            supabase.table("user_jobs")
+            .select(
+                "id, status, applied_at, application_status, feedback, job_feedback, "
+                "jobs(title, description, search_category)"
+            )
+            .eq("user_id", user_id)
+            .execute()
+        )
+        rows = resp.data or []
+    except Exception as e:
+        logger.info(f"   Skipping mis-categorization purge ({e}) — matching proceeds unaffected.")
+        return 0
+
+    stale_ids = []
+    for row in rows:
+        if (row.get("status") or "") in _PURGE_PROTECTED_STATUSES:
+            continue
+        if row.get("applied_at") or row.get("application_status"):
+            continue
+        if row.get("feedback") or row.get("job_feedback"):
+            continue
+        job = row.get("jobs") or {}
+        if not job.get("title"):
+            continue  # can't judge without the job — leave it alone
+        if not _category_relevant(job, user_categories, category_terms):
+            stale_ids.append(row["id"])
+
+    if not stale_ids:
+        return 0
+    try:
+        supabase.table("user_jobs").delete().in_("id", stale_ids).execute()
+        logger.info(f"   🧹 Removed {len(stale_ids)} mis-categorized historical match(es) for user {user_id}")
+        return len(stale_ids)
+    except Exception as e:
+        logger.warning(f"   Mis-categorization purge delete failed ({e}) — continuing anyway.")
+        return 0
+
+
 async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
     """
     Find the top N jobs matching a user's profile using vector similarity,
@@ -409,6 +475,11 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
     if limit is None:
         limit = user.get("job_count_override") or settings.max_jobs_per_user
     logger.info(f"🎯 Matching jobs for user: {user.get('name', user_id)}")
+
+    # Self-heal past category leaks BEFORE computing the fresh ranking, so
+    # this run's freshness/dedup logic doesn't count soon-to-be-deleted
+    # rows as "seen" history worth avoiding.
+    await purge_miscategorized_matches(supabase, user_id, _user_categories(user), _category_terms(user))
 
     seen = await _get_seen_job_ids(supabase, user_id)
     penalties = await _load_relevance_penalties(supabase, user_id)

@@ -48,6 +48,17 @@ interface MatchBreakdown {
   title_terms?: string[];
   similarity?: number;
 }
+// AI recruiter evaluation — the one stage that reads the job description
+// against the resume with comprehension (backend/core/recruiter.py). Verdict
+// is qualitative on purpose: no invented "interview probability" numbers.
+interface RecruiterEval {
+  verdict?: string; // apply | stretch | skip
+  fit_score?: number | null;
+  strengths?: string[];
+  missing?: string[];
+  risks?: string[];
+  reason?: string;
+}
 interface UserJob {
   id: string;
   match_score: number;
@@ -67,6 +78,7 @@ interface UserJob {
   // User-asserted application progress (applied/interviewing/offer/rejected).
   application_status?: string | null;
   match_breakdown?: MatchBreakdown | null;
+  recruiter_eval?: RecruiterEval | null;
 }
 
 // Salary display — only ever real source-API numbers; most boards don't
@@ -705,6 +717,57 @@ function WhyThisMatched({ breakdown }: { breakdown: MatchBreakdown }) {
   );
 }
 
+// ── AI recruiter's take — verdict + written reasoning + gap analysis ──────────
+// Qualitative only (Apply / Stretch / Not recommended): never a fabricated
+// "interview probability" percentage (docs/PRODUCT_STRATEGY_BETA.md, Trust).
+const VERDICT_STYLES: Record<string, { label: string; bg: string; color: string; border: string }> = {
+  apply: { label: "Recruiter's take: Apply", bg: "#DCFCE7", color: "#15803D", border: "#BBF7D0" },
+  stretch: { label: "Recruiter's take: Worth a shot", bg: "#FEF3C7", color: "#B45309", border: "#FDE68A" },
+  skip: { label: "Recruiter's take: Not recommended", bg: "#FEE2E2", color: "#B91C1C", border: "#FECACA" },
+};
+
+function RecruiterInsight({ evaluation }: { evaluation: RecruiterEval }) {
+  const style = VERDICT_STYLES[(evaluation.verdict || "").toLowerCase()];
+  if (!style) return null;
+  const strengths = evaluation.strengths || [];
+  // Missing skills and risks answer the same user question ("what's the
+  // gap?") — one list keeps the card compact.
+  const gaps = [...(evaluation.missing || []), ...(evaluation.risks || [])];
+  return (
+    <div className="space-y-2 rounded-md p-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--border)" }}>
+      <span
+        className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold"
+        style={{ background: style.bg, color: style.color, border: `1px solid ${style.border}` }}
+      >
+        {style.label}
+      </span>
+      {evaluation.reason && (
+        <p className="text-xs leading-relaxed" style={{ color: "var(--text-muted)" }}>
+          {evaluation.reason}
+        </p>
+      )}
+      {strengths.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {strengths.map((s, i) => (
+            <span key={`s-${i}`} className="px-2 py-0.5 rounded-full text-xs" style={{ background: "#DCFCE7", color: "#15803D", border: "1px solid #BBF7D0" }}>
+              ✓ {s}
+            </span>
+          ))}
+        </div>
+      )}
+      {gaps.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {gaps.map((s, i) => (
+            <span key={`g-${i}`} className="px-2 py-0.5 rounded-full text-xs" style={{ background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)" }}>
+              ✗ {s}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Job card ─────────────────────────────────────────────────────────────────────
 function JobCard({ match, index, userId, token }: { match: UserJob; index: number; userId: string; token: string }) {
   const job = match.jobs;
@@ -741,6 +804,8 @@ function JobCard({ match, index, userId, token }: { match: UserJob; index: numbe
         </div>
         <ScoreBadge score={match.match_score} />
       </div>
+
+      {match.recruiter_eval && <RecruiterInsight evaluation={match.recruiter_eval} />}
 
       <div className="flex flex-wrap gap-3">
         {match.pdf_url ? (

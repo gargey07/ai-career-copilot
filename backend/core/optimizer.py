@@ -14,6 +14,7 @@ from datetime import date, timedelta
 
 from core.ai import get_ai_provider
 from core.config import get_settings
+from core.recruiter import evaluate_match
 from core.skill_maps import expand_skills, match_skills_to_job
 from core.usage_guard import BudgetExceededError
 from database.supabase_client import get_supabase
@@ -202,6 +203,17 @@ def _find_recent_resume(supabase, user_id: str, job_id: str, today: str) -> dict
         return None
 
 
+def _store_recruiter_eval(supabase, match_id: str, eval_result: dict) -> None:
+    """Persist the eval JSON on the match row. Best-effort — recruiter_eval
+    is a new column, and an un-run migration must cost only the stored
+    detail, never the gate (the in-memory verdict still applies) or the
+    pipeline (same contract as match_breakdown in matcher.py)."""
+    try:
+        supabase.table("user_jobs").update({"recruiter_eval": eval_result}).eq("id", match_id).execute()
+    except Exception as e:
+        logger.info(f"   Couldn't store recruiter_eval ({e}) — run the recruiter_eval column migration.")
+
+
 def _apply_cached_resume(supabase, match_id: str, cached: dict) -> None:
     """Copy a prior generation onto today's row. The PDF is byte-identical
     for the same user+job, so a cached pdf_url skips the Chromium render
@@ -255,7 +267,7 @@ async def run_optimizer_for_match(user_id: str, match_id: str) -> bool:
         except Exception as e:
             logger.warning(f"   Cache apply failed ({e}) — generating fresh.")
 
-    user_resp = supabase.table("users").select("name, resume_text, skills, tools, job_category").eq("id", user_id).single().execute()
+    user_resp = supabase.table("users").select("name, resume_text, skills, tools, job_category, target_roles, experience_level").eq("id", user_id).single().execute()
     user = user_resp.data or {}
     if not user.get("resume_text"):
         return False
@@ -264,6 +276,13 @@ async def run_optimizer_for_match(user_id: str, match_id: str) -> bool:
     job = job_resp.data
     if not job:
         return False
+
+    # Recruiter eval runs here too, but NEVER blocks — the user explicitly
+    # clicked Generate on this job; a "skip" verdict shows in the UI as a
+    # caution alongside the resume they asked for, not as a refusal.
+    eval_result = await evaluate_match(user, job)
+    if eval_result:
+        _store_recruiter_eval(supabase, match_id, eval_result)
 
     optimized = await optimize_resume(
         resume_text=user["resume_text"],
@@ -294,7 +313,7 @@ async def run_optimizer_for_user(user_id: str) -> int:
 
     # 1. Get user profile (resume_quota_override is a newer column — degrade
     #    to the global default pre-migration).
-    base_fields = "name, resume_text, skills, tools, job_category"
+    base_fields = "name, resume_text, skills, tools, job_category, target_roles, experience_level"
     try:
         user_resp = supabase.table("users").select(f"{base_fields}, resume_quota_override").eq("id", user_id).single().execute()
     except Exception:
@@ -318,6 +337,11 @@ async def run_optimizer_for_user(user_id: str) -> int:
     #    generation — the "Resumes Ready: 0 forever" bug. 'pdf_failed' rows
     #    are excluded: they already have resume text and belong to the
     #    user-facing Retry path, not the optimizer.
+    #
+    #    2x overfetch: the recruiter eval below can veto a candidate
+    #    ("skip" — wrong profession / unmeetable requirements), and a
+    #    vetoed slot should go to the next-ranked job rather than shrink
+    #    the user's resume count for the day.
     matches_resp = (
         supabase.table("user_jobs")
         .select("id, job_id, rank")
@@ -326,7 +350,7 @@ async def run_optimizer_for_user(user_id: str) -> int:
         .is_("optimized_resume_text", "null")
         .in_("status", ["matched", "emailed"])
         .order("rank", desc=False)
-        .limit(ai_limit)
+        .limit(ai_limit * 2)
         .execute()
     )
     matches = matches_resp.data or []
@@ -337,7 +361,11 @@ async def run_optimizer_for_user(user_id: str) -> int:
 
     # 3. For each top match, generate resume (+ cover letter when enabled)
     generated = 0
+    vetoed = 0
     for match in matches:
+        if generated >= ai_limit:
+            break  # quota filled — remaining rows were only eval-veto spares
+
         # Reuse a recent generation for the same user+job before spending
         # an AI call (and possibly a Chromium render) on identical output.
         cached = _find_recent_resume(supabase, user_id, match["job_id"], today)
@@ -361,6 +389,24 @@ async def run_optimizer_for_user(user_id: str) -> int:
             continue
 
         job = job_resp.data
+
+        # Recruiter comprehension gate — the one stage that actually READS
+        # the job description against the resume. A "skip" verdict (wrong
+        # profession / unmeetable requirements) frees this slot for the
+        # next-ranked job; eval failure (None) means no gate, never no
+        # resume. The verdict + reasoning are stored either way so the
+        # dashboard can show WHY (docs/PRODUCT_STRATEGY_BETA.md).
+        eval_result = await evaluate_match(user, job)
+        if eval_result:
+            _store_recruiter_eval(supabase, match["id"], eval_result)
+            if eval_result["verdict"] == "skip":
+                vetoed += 1
+                logger.info(
+                    f"   ⛔ Recruiter eval vetoed: {job['title']} @ {job['company']} — "
+                    f"{eval_result['reason'][:160]}"
+                )
+                continue
+
         try:
             optimized_resume = await optimize_resume(
                 resume_text=user["resume_text"],
@@ -402,7 +448,10 @@ async def run_optimizer_for_user(user_id: str) -> int:
         except Exception as e:
             logger.error(f"   ❌ Failed for {job.get('title', match['job_id'])}: {e}")
 
-    logger.info(f"🏁 Optimizer done for user {user_id}: {generated}/{len(matches)} resumes generated")
+    logger.info(
+        f"🏁 Optimizer done for user {user_id}: {generated} resume(s) generated "
+        f"(quota {ai_limit}, {vetoed} vetoed by recruiter eval, {len(matches)} candidates)"
+    )
     return generated
 
 

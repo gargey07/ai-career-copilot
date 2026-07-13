@@ -447,3 +447,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS email_logs_one_digest_per_day
 -- not find valid entry for job" if it was already removed — harmless):
 --   select cron.unschedule('keep-render-warm');
 -- ============================================================
+
+-- ── AI Recruiter Evaluation (2026-07-13) ────────────────────────────────────
+-- One structured recruiter read per resume-generation candidate
+-- (core/recruiter.py): {"verdict": "apply|stretch|skip", "fit_score",
+-- "strengths", "missing", "risks", "reason"}. Gates pipeline resume
+-- generation (a "skip" frees the slot for the next-ranked job) and powers
+-- the dashboard's "Recruiter's take" card. Qualitative verdict only — no
+-- invented interview-probability percentages (Product Value #1).
+-- Run in Supabase SQL Editor:
+ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS recruiter_eval JSONB;
+-- ── End AI recruiter evaluation block ───────────────────────────────────────

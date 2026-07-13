@@ -140,7 +140,8 @@ async def get_dashboard(user_id: str, t: str = Query("", description="Signed das
         "jobs(id, title, company, location, is_remote, source_url, salary_min, salary_max, currency)"
     )
     jobs_resp = None
-    for extra in (", feedback, feedback_reason, job_feedback, job_feedback_reason, application_status, match_breakdown",
+    for extra in (", feedback, feedback_reason, job_feedback, job_feedback_reason, application_status, match_breakdown, recruiter_eval",
+                  ", feedback, feedback_reason, job_feedback, job_feedback_reason, application_status, match_breakdown",
                   ", feedback, feedback_reason, job_feedback, job_feedback_reason",
                   ", feedback, feedback_reason",
                   ""):

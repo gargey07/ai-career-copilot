@@ -33,6 +33,8 @@ interface ApiUsageRow {
   used: number;
   failed?: number; // AI-waterfall failure count for this provider today
   key_configured?: boolean; // present only for key-gated services — omitted means "not applicable"
+  key_length?: number; // validated (post-strip) length the app actually uses
+  raw_env_length?: number | null; // raw os.environ length; null = variable not present on this container at all
 }
 interface AdminUserRow {
   id: string;
@@ -425,7 +427,15 @@ function UsageBar({ row }: { row: ApiUsageRow }) {
           {(row.failed ?? 0) > 0 && (
             <span style={{ color: "var(--coral)" }}>{` · ${row.failed} failed`}</span>
           )}
-          {keyMissing && <span style={{ color: "var(--coral)" }}>{" · no API key set"}</span>}
+          {keyMissing && (
+            <span style={{ color: "var(--coral)" }}>
+              {row.raw_env_length == null
+                ? " · variable not present on this server at all — check the name in Coolify"
+                : row.raw_env_length === 0
+                ? " · variable is present but saved empty"
+                : ` · variable has ${row.raw_env_length} char(s) but got stripped to 0 — likely just quotes/whitespace was pasted`}
+            </span>
+          )}
         </span>
       </div>
       <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--surface-muted)" }}>

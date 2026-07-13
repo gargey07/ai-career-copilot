@@ -12,6 +12,7 @@ until that's set. No general auth exists yet, so keep the token private.
 """
 from __future__ import annotations
 import logging
+import os
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
@@ -283,6 +284,26 @@ def _usage_services() -> list[dict]:
 # exactly what made the Groq outage take a code trace to diagnose instead
 # of a glance at this screen. Services not in this map (e.g. resume_parse)
 # aren't key-gated, so they're just omitted — no True/False to show.
+def _raw_env_length(field_name: str) -> int | None:
+    """
+    The RAW os.environ value's length for a Settings field, bypassing
+    pydantic — Settings._strip_wrapping_chars (config.py) strips
+    whitespace/quote characters from every field on load, so a value that
+    was e.g. a stray '\"' or a lone space would already read back as an
+    empty string from `settings` even though something WAS actually set
+    on the container. Comparing raw vs validated length is what tells
+    "never configured" apart from "configured with garbage that got
+    stripped to nothing" — pydantic-settings matches env vars
+    case-insensitively, so this does too. Returns None when the variable
+    isn't present in the environment at all (vs present-but-empty, 0).
+    """
+    target = field_name.upper()
+    for key, value in os.environ.items():
+        if key.upper() == target:
+            return len(value)
+    return None
+
+
 _KEY_SETTINGS: dict[str, str] = {
     "gemini_generate": "gemini_api_key",
     "gemini_embed": "gemini_api_key",
@@ -414,7 +435,19 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
             "used": used.get(svc["service"], 0),
             "failed": used.get(f"{svc['service'].removesuffix('_generate')}_fail", 0),
             **(
-                {"key_configured": bool(getattr(settings, _KEY_SETTINGS[svc["service"]], ""))}
+                {
+                    "key_configured": bool(getattr(settings, _KEY_SETTINGS[svc["service"]], "")),
+                    # Validated (post-strip) length — 0 even if the raw env
+                    # var had content that got stripped down to nothing.
+                    "key_length": len(getattr(settings, _KEY_SETTINGS[svc["service"]], "") or ""),
+                    # Raw os.environ length — None means the variable isn't
+                    # present on this container AT ALL (a real "never set"
+                    # or wrong name); 0 means present but empty; a
+                    # nonzero value here alongside key_length=0 means
+                    # SOMETHING was saved but our own whitespace/quote
+                    # stripping ate all of it.
+                    "raw_env_length": _raw_env_length(_KEY_SETTINGS[svc["service"]]),
+                }
                 if svc["service"] in _KEY_SETTINGS
                 else {}
             ),

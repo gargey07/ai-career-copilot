@@ -134,6 +134,13 @@ class ConfirmProfileRequest(BaseModel):
     work_type: list[str] = Field(default_factory=list)
     resume_file_path: Optional[str] = None  # set if this profile came from an uploaded resume
     resume_template: str = "modern"  # which PDF design their tailored resumes use
+    # Present when this save comes from the /profile EDIT screen (which
+    # holds the user's signed dashboard token) — identifies WHICH existing
+    # account to update. Without it, an email edit could only ever be an
+    # upsert keyed on the NEW email, which forks a duplicate account and
+    # leaves the old (possibly typo'd) row alive and still receiving every
+    # daily email — the 2026-07 gmial.com daily-bounce incident.
+    dashboard_token: str = ""
 
     @field_validator("preferred_locations")
     @classmethod
@@ -461,6 +468,16 @@ async def confirm_profile(payload: ConfirmProfileRequest, request: Request, back
     client_ip = _client_ip(request)
     if not check_budget(f"profile_confirm_ip_{client_ip}", settings.profile_confirm_daily_limit_per_ip):
         raise HTTPException(429, "Too many profile saves today. Please try again tomorrow.")
+
+    # Email gate — a typo'd domain here becomes a permanently-bouncing
+    # daily send (Gmail accepts then bounces asynchronously, so even
+    # email_logs shows 'sent'). Reject with the suggestion; never
+    # silently auto-correct (core/email_validation.py policy).
+    from core.email_validation import suggest_email_fix
+    email_problem = suggest_email_fix(payload.basic_info.email)
+    if email_problem:
+        raise HTTPException(400, email_problem)
+
     profile_dict = payload.model_dump()
     resume_text = build_resume_text_from_profile(profile_dict)
 
@@ -495,16 +512,44 @@ async def confirm_profile(payload: ConfirmProfileRequest, request: Request, back
         "is_active": True,
     }
 
+    # Identity: a save from the /profile EDIT screen carries the user's
+    # signed dashboard token — update THAT row by id, so changing your
+    # email modifies YOUR account. The email-keyed upsert below can't do
+    # this: with a new email it inserts a brand-new user and the old row
+    # (possibly a typo'd address) lives on, still active, still receiving
+    # every daily send — the exact mechanism behind the daily gmial.com
+    # bounces even after the founder "fixed" their email via the editor.
+    token_user_id = None
+    if payload.dashboard_token:
+        from core.access_token import verify_dashboard_token
+        token_user_id = verify_dashboard_token(payload.dashboard_token)
+        # An invalid/expired token on an edit-screen save falls through to
+        # the signup upsert rather than erroring — worst case is the old
+        # pre-fix behavior, never a blocked save.
+
     # Newer columns — if this database hasn't run the migration yet, drop the
     # offending column and retry so a signup never fails on a missing column.
     newer_columns = ["resume_template", "projects", "secondary_categories"]
     while True:
         try:
+            if token_user_id:
+                resp = supabase.table("users").update(row).eq("id", token_user_id).execute()
+                if resp.data:
+                    break
+                # Token valid but row gone (deleted account) — treat as a
+                # fresh signup instead of failing the save.
+                token_user_id = None
+                continue
             resp = supabase.table("users").upsert(row, on_conflict="email").execute()
             break
         except Exception as e:
             missing = next((c for c in newer_columns if c in row and c in str(e)), None)
             if missing is None:
+                # Changing your email to one another account already uses
+                # hits the users.email unique constraint — say so plainly
+                # instead of a 500.
+                if token_user_id and "email" in str(e).lower() and ("unique" in str(e).lower() or "duplicate" in str(e).lower()):
+                    raise HTTPException(400, "That email is already used by another account.")
                 raise
             logger.warning(f"users.{missing} column missing — run the migration in database/schema.sql")
             row.pop(missing, None)

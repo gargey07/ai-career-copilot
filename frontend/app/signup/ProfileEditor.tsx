@@ -45,6 +45,11 @@ interface ProfileEditorProps {
   initialProfile: Profile;
   resumeFilePath: string | null;
   onConfirmed: (id: string, name: string, dashboardToken: string) => void;
+  // Present on the /profile EDIT screen only — lets the backend update
+  // the EXISTING account by id (email changes included) instead of the
+  // email-keyed signup upsert, which would fork a duplicate account and
+  // leave the old address still receiving daily emails.
+  dashboardToken?: string;
 }
 
 const JOB_CATEGORIES: { value: string; label: string; icon: LucideIcon }[] = [
@@ -85,7 +90,7 @@ const chipButton = (active: boolean) =>
       : "border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--primary)] hover:text-[var(--text)]"
   }`;
 
-export default function ProfileEditor({ initialProfile, resumeFilePath, onConfirmed }: ProfileEditorProps) {
+export default function ProfileEditor({ initialProfile, resumeFilePath, onConfirmed, dashboardToken }: ProfileEditorProps) {
   const [profile, setProfile] = useState<Profile>(initialProfile);
   const [otherCategory, setOtherCategory] = useState(
     !!initialProfile.job_category && !JOB_CATEGORIES.some((c) => c.value === initialProfile.job_category)
@@ -183,7 +188,7 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
       const res = await fetch(`${API_URL}/api/resumes/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...profile, resume_file_path: resumeFilePath }),
+        body: JSON.stringify({ ...profile, resume_file_path: resumeFilePath, dashboard_token: dashboardToken || "" }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));

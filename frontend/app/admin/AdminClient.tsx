@@ -40,6 +40,10 @@ interface AdminUserRow {
   id: string;
   name: string;
   email: string;
+  // Non-null when the stored address looks undeliverable (typo'd domain
+  // like gmial.com) — every send to it bounces, but email_logs shows
+  // 'sent' because Gmail bounces asynchronously. Fix or delete the user.
+  email_suspect?: string | null;
   joined_at: string | null;
   job_category: string;
   experience_level: string;
@@ -715,6 +719,11 @@ export default function AdminClient() {
                           <td className="px-2 py-3">
                             <div className="font-medium" style={{ color: "var(--text)" }}>{u.name}</div>
                             <div className="text-xs" style={{ color: "var(--text-muted)" }}>{u.email}</div>
+                            {u.email_suspect && (
+                              <div className="text-xs mt-0.5 font-medium" style={{ color: "#B91C1C" }}>
+                                ⚠ {u.email_suspect} Every email to this address bounces — fix or delete this user.
+                              </div>
+                            )}
                           </td>
                           <td className="px-2 py-3" style={{ color: "var(--text-muted)" }}>
                             {u.job_category.replace(/_/g, " ")}

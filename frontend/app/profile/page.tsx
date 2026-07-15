@@ -85,7 +85,7 @@ function ProfileEditInner() {
             </p>
           </Card>
         ) : profile ? (
-          <ProfileEditor initialProfile={profile} resumeFilePath={resumeFilePath} onConfirmed={handleConfirmed} />
+          <ProfileEditor initialProfile={profile} resumeFilePath={resumeFilePath} onConfirmed={handleConfirmed} dashboardToken={token} />
         ) : (
           <div className="space-y-4">
             <Skeleton className="h-40 w-full" />

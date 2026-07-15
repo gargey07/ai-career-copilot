@@ -532,11 +532,17 @@ async def admin_overview(token: str = Query(..., description="Admin token")):
     # admin's "View dashboard" links must carry one. Safe to hand out here:
     # this whole endpoint is already behind ADMIN_TOKEN.
     from core.access_token import generate_dashboard_token
+    # email_suspect: flags stored addresses that would bounce (typo'd
+    # domains like gmial.com) — Gmail bounces asynchronously so
+    # email_logs shows 'sent' for these; this is the only place a bad
+    # stored address becomes visible without waiting for a bounce email.
+    from core.email_validation import suggest_email_fix
     user_rows = [
         {
             "id": u["id"],
             "name": u.get("name") or "—",
             "email": u.get("email") or "—",
+            "email_suspect": suggest_email_fix(u.get("email") or ""),
             "joined_at": u.get("created_at"),
             "job_category": u.get("job_category") or "—",
             "experience_level": u.get("experience_level") or "—",

@@ -556,6 +556,26 @@ export default function AdminClient() {
   const backfillSeniority = () => runAdminAction("backfill-seniority", "Couldn't start the seniority backfill.");
   const classifyExperienceAi = () => runAdminAction("classify-experience-ai", "Couldn't start the AI classification.");
 
+  // "Why does this provider show used == failed?" — fires one tiny call
+  // at every configured provider and shows each one's real error text
+  // (401 / 404 model-not-found / 429 quota), no server-log access needed.
+  const [probeResults, setProbeResults] = useState<{ provider: string; ok: boolean; detail: string }[] | null>(null);
+  const [probing, setProbing] = useState(false);
+  const probeProviders = async () => {
+    setProbing(true);
+    setProbeResults(null);
+    try {
+      const res = await fetch(`${API_URL}/api/admin/test-ai-providers?token=${encodeURIComponent(token)}`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || "Couldn't test the providers.");
+      setProbeResults(body.results || []);
+    } catch (e: any) {
+      setProbeResults([{ provider: "error", ok: false, detail: e.message || "Couldn't test the providers." }]);
+    } finally {
+      setProbing(false);
+    }
+  };
+
   // ── Locked state: ask for the token ──────────────────────────────────────────
   if (!token && !loading) {
     return (
@@ -671,6 +691,10 @@ export default function AdminClient() {
                   <Button variant="secondary" onClick={classifyExperienceAi} disabled={pipelineRunning}>
                     Classify experience (AI)
                   </Button>
+                  <Button variant="secondary" onClick={probeProviders} disabled={probing}>
+                    <RefreshCw size={15} strokeWidth={1.75} className={probing ? "animate-spin" : ""} />
+                    {probing ? "Testing…" : "Test AI providers"}
+                  </Button>
                 </div>
               }
             >
@@ -681,6 +705,18 @@ export default function AdminClient() {
                 <p className="mt-5 text-sm rounded-md px-4 py-3" style={{ background: "var(--surface-muted)", color: "var(--text)" }}>
                   {pipelineMsg}
                 </p>
+              )}
+              {probeResults && (
+                <div className="mt-5 space-y-2">
+                  {probeResults.map((r) => (
+                    <div key={r.provider} className="flex items-baseline gap-2 text-sm p-2 rounded-md" style={{ background: "var(--surface-muted)" }}>
+                      <span className="font-semibold shrink-0" style={{ color: r.ok ? "#15803D" : "#B91C1C" }}>
+                        {r.ok ? "✓" : "✗"} {r.provider}
+                      </span>
+                      <span className="text-xs font-mono break-all" style={{ color: "var(--text-muted)" }}>{r.detail}</span>
+                    </div>
+                  ))}
+                </div>
               )}
             </SectionCard>
 

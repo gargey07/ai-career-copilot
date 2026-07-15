@@ -306,6 +306,49 @@ def get_ai_provider() -> AIProvider:
     return _provider_instance
 
 
+# ── Provider probe (admin diagnostic) ─────────────────────────────────────────
+async def _probe_one(provider: AIProvider) -> dict:
+    try:
+        text = await asyncio.wait_for(
+            provider.generate_text("Reply with the single word OK.", temperature=0.0),
+            timeout=_PROVIDER_TIMEOUT_SECONDS + 5,
+        )
+        return {"provider": provider.name, "ok": True, "detail": (text or "").strip()[:80]}
+    except Exception as e:
+        return {"provider": provider.name, "ok": False, "detail": f"{type(e).__name__}: {e}"[:300]}
+
+
+async def probe_all_providers() -> list[dict]:
+    """
+    One tiny live call to EACH configured provider individually — the
+    admin "why is this key failing" diagnostic. The usage screen's
+    counters can only say THAT a provider fails (used == failed); the
+    waterfall's per-call log lines have the actual reason, but reading
+    server logs shouldn't be required to see "401 invalid key" vs "404
+    model not found" vs "429 out of quota". Never raises; every outcome
+    (including a provider whose own daily budget is already exhausted —
+    itself useful information) comes back as a row. Probes run
+    concurrently so a hanging provider costs ~one timeout, not a sum.
+    """
+    providers: list[AIProvider] = []
+    results: list[dict] = []
+    if settings.gemini_api_key:
+        try:
+            providers.append(GeminiProvider())
+        except Exception as e:
+            results.append({"provider": "gemini", "ok": False, "detail": f"init failed — {type(e).__name__}: {e}"[:300]})
+    providers.extend(_build_fallback_providers())
+    if settings.openai_api_key:
+        try:
+            providers.append(OpenAIProvider())
+        except Exception as e:
+            results.append({"provider": "openai", "ok": False, "detail": f"init failed — {type(e).__name__}: {e}"[:300]})
+    if not providers and not results:
+        return [{"provider": "none", "ok": False, "detail": "No AI provider keys are configured on this server."}]
+    results.extend(await asyncio.gather(*(_probe_one(p) for p in providers)))
+    return results
+
+
 # ── Quick test ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import asyncio

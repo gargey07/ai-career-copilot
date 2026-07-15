@@ -89,7 +89,11 @@ class Settings(BaseSettings):
     openrouter_daily_limit: int = 50
 
     github_models_token: str = ""
-    github_models_model: str = "gpt-4o-mini"
+    # GitHub Models' inference endpoint (models.github.ai) requires
+    # publisher-prefixed model IDs — bare "gpt-4o-mini" 404s on every
+    # call, which is exactly what the admin usage screen showed
+    # (10 used / 10 failed, 2026-07-15).
+    github_models_model: str = "openai/gpt-4o-mini"
     github_models_daily_limit: int = 60
 
     mistral_api_key: str = ""

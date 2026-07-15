@@ -245,6 +245,25 @@ async def _classify_experience_ai() -> None:
     logger.info(f"✅ AI classification catch-up: {updated}/{scanned} jobs got a value")
 
 
+@router.post("/test-ai-providers")
+async def test_ai_providers(token: str = Query(..., description="Admin token")):
+    """
+    Fire one tiny prompt at EACH configured AI provider individually and
+    return per-provider ok/error — the diagnostic behind "this provider
+    shows used == failed on the usage screen, but WHY?". The waterfall
+    hides individual providers' errors by design (it just moves on); this
+    surfaces the actual 401/404/429 text without needing server logs.
+    Costs one budget-counted call per configured provider per click.
+    Synchronous on purpose (unlike the pipeline/backfill triggers): the
+    caller wants the results, and concurrent probes bound the wait to
+    roughly one provider timeout.
+    """
+    _require_admin(token)
+    _audit("ai_providers_probed")
+    from core.ai import probe_all_providers
+    return {"results": await probe_all_providers()}
+
+
 @router.post("/classify-experience-ai")
 async def classify_experience_ai_now(background_tasks: BackgroundTasks, token: str = Query(..., description="Admin token")):
     """AI fallback classification for jobs the free regex/title backfills

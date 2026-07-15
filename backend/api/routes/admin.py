@@ -198,7 +198,10 @@ async def _classify_experience_ai() -> None:
     empty results, since that's a strong signal the budget/provider is
     exhausted for today rather than worth scanning every remaining row.
     """
-    from core.job_classifier import classify_job
+    # resolve_job_experience = application-page fetch + regex first (free
+    # — many Adzuna listings state the requirement only on the company's
+    # ATS page behind the apply link), then AI with the page as context.
+    from core.job_classifier import resolve_job_experience
 
     supabase = get_supabase()
     updated = scanned = 0
@@ -210,7 +213,7 @@ async def _classify_experience_ai() -> None:
         while not exhausted:
             resp = (
                 supabase.table("jobs")
-                .select("id, title, description")
+                .select("id, title, description, source_url")
                 .is_("required_experience_months", "null")
                 .is_("seniority_level", "null")
                 .order("collected_at", desc=True)
@@ -222,7 +225,7 @@ async def _classify_experience_ai() -> None:
                 break
             for row in rows:
                 scanned += 1
-                result = await classify_job(row)
+                result = await resolve_job_experience(row)
                 if result is None:
                     consecutive_empty += 1
                     if consecutive_empty >= 10:

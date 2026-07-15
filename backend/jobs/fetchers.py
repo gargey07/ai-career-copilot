@@ -138,6 +138,65 @@ def infer_seniority_level(title: str) -> Optional[str]:
     return None
 
 
+# ── Application-page text (experience enrichment) ─────────────────────────────
+# Many Adzuna listings state the experience requirement ONLY on the
+# company's own ATS page behind the apply link ("Required Experience:
+# 2 - 5 Years" on e.g. PeopleStrong), never in the truncated description
+# Adzuna's API returns — so neither the description regex nor the AI
+# classifier (which also only saw the description) could ever find it.
+# These helpers fetch that page's visible text so the SAME parsers get a
+# shot at the place the requirement actually lives.
+
+_PAGE_FETCH_TIMEOUT_SECONDS = 8.0
+_PAGE_FETCH_MAX_BYTES = 500_000
+# A real browser-ish UA — several ATS providers hard-block default
+# python-httpx UAs with a 403 while serving the identical page otherwise.
+_PAGE_FETCH_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; AICareerCopilot/1.0; +jobs-metadata)"}
+
+
+def _extract_page_text(html: str) -> str:
+    """Visible text from an HTML page — scripts/styles dropped, whitespace
+    collapsed. Best-effort: any parse failure returns ""."""
+    if not html:
+        return ""
+    try:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["script", "style", "noscript"]):
+            tag.decompose()
+        return re.sub(r"\s+", " ", soup.get_text(" ")).strip()
+    except Exception:
+        return ""
+
+
+async def fetch_job_page_text(url: str) -> str:
+    """
+    Visible text of a job's application page, or "" on ANY failure —
+    bad/synthetic URL (JSearch rows without an apply link store
+    "jsearch_<id>"), timeout, non-HTML response, JS-only page that ships
+    an empty shell. Callers must treat "" as "page told us nothing",
+    never as an error: this is enrichment, and plenty of ATS pages are
+    client-rendered and legitimately yield nothing over plain HTTP.
+    """
+    url = (url or "").strip()
+    if not url.lower().startswith(("http://", "https://")):
+        return ""
+    try:
+        async with httpx.AsyncClient(
+            timeout=_PAGE_FETCH_TIMEOUT_SECONDS, follow_redirects=True, headers=_PAGE_FETCH_HEADERS
+        ) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                return ""
+            content_type = resp.headers.get("content-type", "")
+            if "html" not in content_type and "text" not in content_type:
+                return ""
+            return _extract_page_text(resp.text[:_PAGE_FETCH_MAX_BYTES])
+    except Exception:
+        return ""
+
+
 # ── Normalized Job Schema ─────────────────────────────────────────────────────
 def normalize_job(
     source: str,

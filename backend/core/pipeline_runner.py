@@ -78,14 +78,14 @@ async def _classify_unknown_experience_jobs(batch_size: int = 30) -> int:
     """
     supabase = get_supabase()
     try:
-        from core.job_classifier import classify_job
+        from core.job_classifier import resolve_job_experience
     except Exception as e:
         logger.info(f"   Skipping AI experience classification (unavailable: {e})")
         return 0
 
     resp = (
         supabase.table("jobs")
-        .select("id, title, description")
+        .select("id, title, description, source_url")
         .is_("required_experience_months", "null")
         .is_("seniority_level", "null")
         .limit(batch_size)
@@ -94,13 +94,14 @@ async def _classify_unknown_experience_jobs(batch_size: int = 30) -> int:
     jobs = resp.data or []
     count = 0
     for job in jobs:
-        # classify_job checks the daily budget BEFORE making any AI call,
-        # so once it's exhausted every remaining job in this batch
-        # returns None near-instantly (no wasted spend) — skip and move
-        # on rather than breaking the loop, so one job's unparseable
-        # output (a real but separate failure mode) doesn't cost the rest
-        # of the batch their fair shot.
-        result = await classify_job(job)
+        # resolve_job_experience tries the job's own application page
+        # first (free — many Adzuna listings state the requirement only
+        # there), then AI. The AI half checks its daily budget BEFORE
+        # making any call, so once it's exhausted the remaining jobs cost
+        # one cheap page-fetch each at most — skip and move on rather
+        # than breaking the loop, so one job's unparseable output doesn't
+        # cost the rest of the batch their fair shot.
+        result = await resolve_job_experience(job)
         if result is None:
             continue
         try:

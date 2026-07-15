@@ -136,3 +136,47 @@ async def classify_job(job: dict) -> dict | None:
     if result is None:
         logger.info(f"   Job classification returned unparseable output for {job.get('id')} — leaving as unknown.")
     return result
+
+
+# How much application-page text to hand the AI classifier when the free
+# regex found nothing on the page either — enough to cover an ATS page's
+# requirements block without blowing the prompt budget.
+_MAX_PAGE_TEXT_FOR_AI_CHARS = 2000
+
+
+async def resolve_job_experience(job: dict) -> dict | None:
+    """
+    Full experience-resolution ladder for one still-unknown job, cheapest
+    step first:
+
+    1. Fetch the job's own application page (jobs/fetchers.py's
+       fetch_job_page_text) and run the FREE regex on its visible text —
+       many Adzuna listings state the requirement ONLY there ("Required
+       Experience: 2 - 5 Years" on the company's ATS page), never in the
+       truncated description the API returned. Costs one HTTP GET, no AI.
+    2. AI classification (classify_job) — with the page text appended to
+       the description when we got any, so the model sees the same
+       content a human clicking Apply sees.
+
+    Returns the same {"required_experience_months", "seniority_level"}
+    shape as classify_job, or None when every rung came up empty. Same
+    contract as everything else in this module: None means "still
+    unknown, leave the row untouched", never an error.
+    """
+    from jobs.fetchers import experience_months_from_text, fetch_job_page_text
+
+    page_text = await fetch_job_page_text(job.get("source_url") or "")
+    if page_text:
+        months = experience_months_from_text(page_text)
+        if months:
+            logger.info(f"   📄 Application page stated the requirement for job {job.get('id')}: {months} months")
+            return {"required_experience_months": months, "seniority_level": None}
+
+    job_for_ai = dict(job)
+    if page_text:
+        job_for_ai["description"] = (
+            (job.get("description") or "")
+            + "\n\nText from the job's application page:\n"
+            + page_text[:_MAX_PAGE_TEXT_FOR_AI_CHARS]
+        ).strip()
+    return await classify_job(job_for_ai)

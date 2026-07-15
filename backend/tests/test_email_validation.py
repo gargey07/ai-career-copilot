@@ -57,3 +57,24 @@ def test_structural_garbage_rejected():
 
 def test_whitespace_tolerated_around_valid_address():
     assert suggest_email_fix("  someone@gmail.com  ") is None
+
+
+# ── Sender-level guard ─────────────────────────────────────────────────────────
+def test_send_email_refuses_known_undeliverable_address(monkeypatch):
+    """Last line of defense: rows that predate signup validation (or a
+    ghost duplicate account) must not generate daily bounces — the sender
+    itself refuses the address before any provider is attempted."""
+    import asyncio
+    import core.email_sender as email_sender
+
+    def _explode(*a, **k):
+        raise AssertionError("provider must never be attempted for an undeliverable address")
+
+    monkeypatch.setattr(email_sender, "_send_via_gmail", _explode)
+    monkeypatch.setattr(email_sender, "_send_via_resend", _explode)
+    monkeypatch.setattr(email_sender.settings, "gmail_user", "founder@gmail.com")
+    monkeypatch.setattr(email_sender.settings, "gmail_app_password", "xxxx")
+    monkeypatch.setattr(email_sender.settings, "resend_api_key", "re_xxx")
+
+    result = asyncio.run(email_sender._send_email("gargeypatel123@gmial.com", "Subject", "<p>hi</p>", ""))
+    assert result is None

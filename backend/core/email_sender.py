@@ -338,6 +338,22 @@ async def _send_email(
     actually accepted for delivery, not just that the API call didn't
     throw (see _deliver_via_smtp).
     """
+    # Undeliverable-address guard: never hand a known-bad address to a
+    # provider at all. Gmail SMTP ACCEPTS mail for typo domains like
+    # gmial.com and bounces asynchronously — so without this check the
+    # send "succeeds", email_logs says 'sent', and the founder's inbox
+    # gets a bounce every single day (2026-07 production incident; the
+    # typo'd row survived a profile-edit "fix" because the old confirm
+    # endpoint forked a duplicate account instead of updating). Signup now
+    # rejects these addresses too (api/routes/resumes.py), but rows that
+    # predate that validation — or arrive by any future path — must not
+    # generate daily bounces while waiting to be cleaned up.
+    from core.email_validation import suggest_email_fix
+    email_problem = suggest_email_fix(to_email)
+    if email_problem:
+        logger.warning(f"   Not sending to {to_email!r} — undeliverable address ({email_problem}) Fix or delete this user in the admin panel.")
+        return None
+
     attachments = attachments or []
     attempted = False
     last_error: Exception | None = None

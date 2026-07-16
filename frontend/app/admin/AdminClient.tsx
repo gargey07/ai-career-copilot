@@ -420,6 +420,104 @@ function PdfFailuresPanel({ token, pdfEngine }: { token: string; pdfEngine?: Pdf
   );
 }
 
+// ── Suspect emails — definitive, standalone scan ────────────────────────────
+// The users table on /overview already annotates rows with email_suspect,
+// but that's one field buried in a big payload — easy to miss if the
+// table is scrolled, or if the client is running a build from before that
+// field existed. This is a dedicated, unambiguous answer: every stored
+// email, checked fresh, right now, independent of anything else on screen.
+interface SuspectEmailRow {
+  user_id: string;
+  name: string;
+  email: string | null;
+  is_active: boolean;
+  created_at: string | null;
+  problem: string;
+}
+
+function SuspectEmailsPanel({ token }: { token: string }) {
+  const [rows, setRows] = useState<SuspectEmailRow[] | null>(null);
+  const [scanned, setScanned] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/admin/suspect-emails?token=${encodeURIComponent(token)}`);
+      const data = await res.json();
+      setRows(res.ok ? data.flagged : []);
+      setScanned(res.ok ? data.scanned : null);
+    } catch {
+      setRows([]);
+      setScanned(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteUser = async (userId: string) => {
+    setBusyId(userId);
+    try {
+      const res = await fetch(`${API_URL}/api/admin/users/${userId}?token=${encodeURIComponent(token)}`, { method: "DELETE" });
+      if (res.ok) setRows((r) => (r || []).filter((row) => row.user_id !== userId));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <SectionCard
+      icon={AlertTriangle}
+      title="Suspect emails"
+      action={
+        <Button variant="secondary" onClick={load} disabled={loading}>
+          <RefreshCw size={15} strokeWidth={1.75} className={loading ? "animate-spin" : ""} />
+          {loading ? "Scanning…" : rows === null ? "Scan now" : "Rescan"}
+        </Button>
+      }
+    >
+      {rows === null ? (
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          Click &quot;Scan now&quot; to check EVERY stored user email against known typo domains
+          (gmial.com, gamil.com, hotmial.com, ...) — the definitive answer to whether a bad
+          address exists anywhere, independent of table scrolling or a stale page.
+        </p>
+      ) : rows.length === 0 ? (
+        <EmptyState
+          icon={Mail}
+          title="No suspect emails found"
+          description={scanned != null ? `Checked all ${scanned} stored user email(s) — none look undeliverable.` : "None found."}
+        />
+      ) : (
+        <div className="space-y-3">
+          {rows.map((r) => (
+            <div key={r.user_id} className="p-3 rounded-md" style={{ background: "var(--surface-muted)" }}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <span className="text-sm font-medium" style={{ color: "var(--text)" }}>{r.name}</span>
+                  <p className="text-xs mt-0.5 font-mono" style={{ color: "var(--text)" }}>{r.email}</p>
+                  <p className="text-xs mt-1" style={{ color: "#B91C1C" }}>{r.problem}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => deleteUser(r.user_id)}
+                  disabled={busyId === r.user_id}
+                  className="inline-flex items-center gap-1 text-xs font-medium hover:underline disabled:opacity-60 shrink-0"
+                  style={{ color: "var(--coral)" }}
+                >
+                  <Trash2 size={12} strokeWidth={2} />
+                  {busyId === r.user_id ? "Deleting…" : "Delete"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
 // The exact diagnostic behind "PDF_ENGINE isn't set / got dropped in a
 // migration" — same raw-vs-configured distinction as the API-key checks,
 // surfaced at a glance instead of requiring a SQL query or log access.
@@ -721,6 +819,8 @@ export default function AdminClient() {
             </SectionCard>
 
             <PdfFailuresPanel token={token} pdfEngine={overview.pdf_engine} />
+
+            <SuspectEmailsPanel token={token} />
 
             {/* Users */}
             <SectionCard icon={Users} title="Users">

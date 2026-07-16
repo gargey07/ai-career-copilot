@@ -415,6 +415,39 @@ async def recent_pdf_failures(token: str = Query(..., description="Admin token")
     }
 
 
+@router.get("/suspect-emails")
+async def suspect_emails(token: str = Query(..., description="Admin token")):
+    """
+    Definitive scan: every stored user email run through the same
+    core/email_validation.suggest_email_fix check /overview annotates
+    rows with, but as its OWN standalone query — not embedded in the
+    big /overview payload, so a client on stale-cached/paginated/scrolled
+    table state (or simply not deployed past the commit that added
+    email_suspect) still gets a straight, unambiguous answer to "does a
+    bad email exist ANYWHERE in the users table right now." No .limit()
+    — every row is checked, every time.
+    """
+    _require_admin(token)
+    from core.email_validation import suggest_email_fix
+
+    supabase = get_supabase()
+    resp = supabase.table("users").select("id, name, email, is_active, created_at").execute()
+    rows = resp.data or []
+    flagged = []
+    for r in rows:
+        problem = suggest_email_fix(r.get("email") or "")
+        if problem:
+            flagged.append({
+                "user_id": r["id"],
+                "name": r.get("name") or "—",
+                "email": r.get("email"),
+                "is_active": bool(r.get("is_active")),
+                "created_at": r.get("created_at"),
+                "problem": problem,
+            })
+    return {"scanned": len(rows), "flagged": flagged}
+
+
 # ── Overview ──────────────────────────────────────────────────────────────────
 # Which api_usage services to surface, with their configured daily caps.
 # resume_parse rows are per-IP (resume_parse_ip_<addr>) and get summed.

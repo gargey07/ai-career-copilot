@@ -83,17 +83,27 @@ class _FakeProvider:
 
 def test_extract_job_draft_happy_path(monkeypatch):
     monkeypatch.setattr(job_intake, "get_ai_provider", lambda: _FakeProvider(response=json.dumps(_DRAFT)))
-    result = asyncio.run(extract_job_draft("some raw posting text"))
-    assert result["title"] == "Backend Engineer"
+    draft, failure = asyncio.run(extract_job_draft("some raw posting text"))
+    assert draft["title"] == "Backend Engineer"
+    assert failure is None
 
 
-def test_extract_job_draft_failure_contract(monkeypatch):
-    # Provider down or unparseable -> None, never an exception.
+def test_extract_job_draft_distinguishes_failure_kinds(monkeypatch):
+    # The two failures need DIFFERENT user messages: "AI busy, retry" vs
+    # "this content has no job in it, retrying won't help" (the live
+    # intapidm auth-page bug showed the busy message for a login wall).
     monkeypatch.setattr(job_intake, "get_ai_provider", lambda: _FakeProvider(error=RuntimeError("boom")))
-    assert asyncio.run(extract_job_draft("text")) is None
+    assert asyncio.run(extract_job_draft("text")) == (None, "ai_unavailable")
+
     monkeypatch.setattr(job_intake, "get_ai_provider", lambda: _FakeProvider(response="no json here"))
-    assert asyncio.run(extract_job_draft("text")) is None
-    assert asyncio.run(extract_job_draft("")) is None
+    assert asyncio.run(extract_job_draft("text")) == (None, "no_job_found")
+
+    # AI answered with valid JSON but no title -> still not a posting.
+    monkeypatch.setattr(job_intake, "get_ai_provider",
+                        lambda: _FakeProvider(response=json.dumps({**_DRAFT, "title": ""})))
+    assert asyncio.run(extract_job_draft("Sign in to continue")) == (None, "no_job_found")
+
+    assert asyncio.run(extract_job_draft("")) == (None, "no_job_found")
 
 
 # ── Fake supabase for the endpoints ──────────────────────────────────────────
@@ -246,6 +256,74 @@ def test_confirm_rejects_bad_token(monkeypatch):
     with pytest.raises(HTTPException) as e:
         asyncio.run(job_intake_confirm("u1", JobConfirmRequest(title="T", description="D"), t="wrong"))
     assert e.value.status_code == 401
+
+
+# ── /job-intake/extract — the URL path ───────────────────────────────────────
+def _patch_extract_env(monkeypatch, db, plain_text="", rendered_text="", ai_response=None):
+    import jobs.fetchers as fetchers_module
+
+    _patch_endpoint_env(monkeypatch, db)
+
+    async def fake_plain(url):
+        return plain_text
+    monkeypatch.setattr(fetchers_module, "fetch_job_page_text", fake_plain)
+
+    async def fake_rendered(url):
+        return rendered_text
+    monkeypatch.setattr(job_intake, "fetch_rendered_page_text", fake_rendered)
+    monkeypatch.setattr(job_intake, "get_ai_provider", lambda: _FakeProvider(response=ai_response))
+
+
+def test_extract_login_wall_url_gets_actionable_message_not_ai_busy(monkeypatch):
+    # The live intapidm.infosysapps.com bug: an auth page yields no real
+    # text via either fetch. The user must be told to paste text/screenshot
+    # — NOT that the AI is busy (retrying can never fix a login wall).
+    db = _FakeSupabase()
+    _patch_extract_env(monkeypatch, db, plain_text="Sign in", rendered_text="Sign in to continue")
+
+    from api.routes.users import job_intake_extract
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(job_intake_extract("u1", t="good", url="https://ats.example.com/auth/login", text="", image=None))
+    assert e.value.status_code == 422
+    assert "login" in e.value.detail.lower()
+    assert "busy" not in e.value.detail.lower()
+
+
+def test_extract_url_uses_rendered_fetch_when_plain_fetch_is_empty(monkeypatch):
+    # JS-only ATS page: plain HTTP sees nothing, the rendered fetch gets
+    # the posting, and extraction proceeds from that.
+    db = _FakeSupabase()
+    posting = "Backend Engineer at Acme. Build APIs with Python and FastAPI. " * 5
+    _patch_extract_env(monkeypatch, db, plain_text="", rendered_text=posting,
+                       ai_response=json.dumps(_DRAFT))
+
+    from api.routes.users import job_intake_extract
+    result = asyncio.run(job_intake_extract("u1", t="good", url="https://ats.example.com/job/1", text="", image=None))
+    assert result["status"] == "ok"
+    assert result["draft"]["title"] == "Backend Engineer"
+
+
+def test_extract_pasted_text_no_job_gets_content_message(monkeypatch):
+    db = _FakeSupabase()
+    _patch_endpoint_env(monkeypatch, db)
+    monkeypatch.setattr(job_intake, "get_ai_provider", lambda: _FakeProvider(response="that's not a job"))
+
+    from api.routes.users import job_intake_extract
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(job_intake_extract("u1", t="good", url="", text="hello I like jobs", image=None))
+    assert e.value.status_code == 422
+    assert "job posting" in e.value.detail.lower()
+
+
+def test_extract_ai_down_still_says_busy(monkeypatch):
+    db = _FakeSupabase()
+    _patch_endpoint_env(monkeypatch, db)
+    monkeypatch.setattr(job_intake, "get_ai_provider", lambda: _FakeProvider(error=RuntimeError("all providers down")))
+
+    from api.routes.users import job_intake_extract
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(job_intake_extract("u1", t="good", url="", text="A real pasted job posting text", image=None))
+    assert e.value.status_code == 503
 
 
 # ── /matches/{id}/analyze ─────────────────────────────────────────────────────

@@ -672,14 +672,33 @@ async def job_intake_extract(
     url = (url or "").strip()
     raw_text = (text or "").strip()
 
-    from core.job_intake import extract_job_draft, extract_text_from_image
+    from core.job_intake import (
+        MIN_USEFUL_PAGE_CHARS,
+        extract_job_draft,
+        extract_text_from_image,
+        fetch_rendered_page_text,
+    )
 
     # Source priority: pasted text is what the user deliberately gave us;
     # a URL fetch is free; the vision call is the most expensive and least
     # reliable, so it's last.
+    from_url = False
     if not raw_text and url:
+        from_url = True
         from jobs.fetchers import fetch_job_page_text
         raw_text = await fetch_job_page_text(url)
+        if len(raw_text) < MIN_USEFUL_PAGE_CHARS:
+            # Most modern ATS pages only render the posting via client-side
+            # JavaScript — a real browser gets what the plain fetch can't.
+            rendered = await fetch_rendered_page_text(url)
+            if len(rendered) > len(raw_text):
+                raw_text = rendered
+        if len(raw_text) < MIN_USEFUL_PAGE_CHARS:
+            raise HTTPException(
+                422,
+                "That page wouldn't show us the job — it probably needs a login. "
+                "Copy the posting's text (or take a screenshot) and paste that instead.",
+            )
 
     if not raw_text and image is not None:
         content = await image.read()
@@ -700,10 +719,20 @@ async def job_intake_extract(
             "We couldn't read anything from that — paste the job description text instead.",
         )
 
-    draft = await extract_job_draft(raw_text)
+    draft, failure = await extract_job_draft(raw_text)
     if draft is None:
+        if failure == "ai_unavailable":
+            raise HTTPException(
+                503, "The AI reader is busy right now — try again in a minute, or paste the details manually."
+            )
+        # The AI answered but found no posting in what we read — retrying
+        # won't help; the CONTENT is the problem (login wall / not a job).
         raise HTTPException(
-            503, "The AI reader is busy right now — try again in a minute, or paste the details manually."
+            422,
+            "We couldn't find a job posting in that — the page may need a login. "
+            "Copy the posting's text (or take a screenshot) and paste that instead."
+            if from_url
+            else "That didn't look like a complete job posting — paste the full posting, including the job title.",
         )
 
     # Which fields need the user's attention on the review screen.

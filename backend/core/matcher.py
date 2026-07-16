@@ -445,7 +445,7 @@ async def purge_miscategorized_matches(
             supabase.table("user_jobs")
             .select(
                 "id, status, applied_at, application_status, feedback, job_feedback, "
-                "jobs(title, description, search_category)"
+                "jobs(title, description, search_category, source)"
             )
             .eq("user_id", user_id)
             .execute()
@@ -464,6 +464,11 @@ async def purge_miscategorized_matches(
         if row.get("feedback") or row.get("job_feedback"):
             continue
         job = row.get("jobs") or {}
+        if job.get("source") == "user_submitted":
+            # The user explicitly added this job themselves (AI Application
+            # Review intake) — it never went through category-tagged
+            # fetching, and "you chose it" outranks any gate's opinion.
+            continue
         if not job.get("title"):
             continue  # can't judge without the job — leave it alone
         if not _category_relevant(job, user_categories, category_terms):

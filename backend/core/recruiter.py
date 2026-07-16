@@ -60,9 +60,14 @@ Rules:
   Never invent candidate experience.
 - strengths/missing/risks: short concrete phrases (e.g. "FastAPI",
   "no AWS experience"), not sentences.
+- suggestions: 2-4 concrete actions the candidate could take BEFORE
+  applying to close this job's specific gaps (e.g. "Add your Docker
+  project to your resume", "Mention REST API work in your summary").
+  Only actions grounded in the gap between this resume and this job.
+  Never promise outcomes, percentages, or invented experience.
 
 Respond with ONLY a JSON object, no markdown, in exactly this shape:
-{{"verdict": "apply|stretch|skip", "fit_score": 0-100, "strengths": ["..."], "missing": ["..."], "risks": ["..."], "reason": "2-3 plain sentences a job seeker can understand"}}
+{{"verdict": "apply|stretch|skip", "fit_score": 0-100, "strengths": ["..."], "missing": ["..."], "risks": ["..."], "suggestions": ["..."], "reason": "2-3 plain sentences a job seeker can understand"}}
 
 ---
 
@@ -127,6 +132,7 @@ def parse_eval(raw: str) -> dict | None:
         "strengths": _phrases("strengths"),
         "missing": _phrases("missing"),
         "risks": _phrases("risks"),
+        "suggestions": _phrases("suggestions"),
         "reason": str(data.get("reason") or "").strip()[:1000],
     }
 

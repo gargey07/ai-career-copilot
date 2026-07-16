@@ -244,15 +244,24 @@ async def run_optimizer_for_match(user_id: str, match_id: str) -> bool:
     supabase = get_supabase()
     today = date.today().isoformat()
 
-    match_resp = (
-        supabase.table("user_jobs")
-        .select("id, job_id, optimized_resume_text")
-        .eq("id", match_id)
-        .eq("user_id", user_id)
-        .single()
-        .execute()
-    )
-    match = match_resp.data
+    # recruiter_eval is a newer column — same missing-migration fallback
+    # as everywhere else it's selected.
+    match = None
+    for fields in ("id, job_id, optimized_resume_text, recruiter_eval",
+                   "id, job_id, optimized_resume_text"):
+        try:
+            match_resp = (
+                supabase.table("user_jobs")
+                .select(fields)
+                .eq("id", match_id)
+                .eq("user_id", user_id)
+                .single()
+                .execute()
+            )
+            match = match_resp.data
+            break
+        except Exception:
+            continue
     if not match:
         return False
     if match.get("optimized_resume_text"):
@@ -280,9 +289,12 @@ async def run_optimizer_for_match(user_id: str, match_id: str) -> bool:
     # Recruiter eval runs here too, but NEVER blocks — the user explicitly
     # clicked Generate on this job; a "skip" verdict shows in the UI as a
     # caution alongside the resume they asked for, not as a refusal.
-    eval_result = await evaluate_match(user, job)
-    if eval_result:
-        _store_recruiter_eval(supabase, match_id, eval_result)
+    # An eval already stored (the on-demand Analyze button, or the add-a-job
+    # confirm step) is reused instead of paying for the same AI call twice.
+    if not match.get("recruiter_eval"):
+        eval_result = await evaluate_match(user, job)
+        if eval_result:
+            _store_recruiter_eval(supabase, match_id, eval_result)
 
     optimized = await optimize_resume(
         resume_text=user["resume_text"],

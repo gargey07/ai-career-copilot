@@ -472,7 +472,13 @@ async def send_morning_digest(user_id: str) -> bool:
         .order("match_score", desc=True)
         .execute()
     )
-    all_matches = matches_resp.data or []
+    # Jobs the user added themselves (AI Application Review intake) live on
+    # the dashboard's "Jobs you added" section — a "we found these for you"
+    # digest that includes the user's own submission reads as broken.
+    all_matches = [
+        m for m in (matches_resp.data or [])
+        if (m.get("jobs") or {}).get("source") != "user_submitted"
+    ]
     matches = all_matches[:MAX_JOBS_PER_EMAIL]
     more_on_dashboard = max(0, len(all_matches) - len(matches))
     if not matches:

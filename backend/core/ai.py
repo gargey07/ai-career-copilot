@@ -112,6 +112,33 @@ class GeminiProvider(AIProvider):
             logger.error(f"❌ Gemini generate_text failed: {e}")
             raise
 
+    async def generate_vision(self, prompt: str, image_bytes: bytes, mime: str) -> str:
+        """
+        Text generation from a prompt + one image (job-posting screenshots).
+        Same budget bucket, rate limit, and blocking-SDK-to_thread handling
+        as generate_text — an image request is still one generation call.
+        """
+        if not check_budget("gemini_generate", settings.gemini_generate_daily_limit):
+            raise BudgetExceededError("Gemini generate_text daily budget exhausted")
+
+        global _last_gemini_call
+        elapsed = time.time() - _last_gemini_call
+        if elapsed < _GEMINI_MIN_DELAY:
+            await asyncio.sleep(_GEMINI_MIN_DELAY - elapsed)
+
+        try:
+            response = await asyncio.to_thread(
+                self.model.generate_content,
+                [prompt, {"mime_type": mime, "data": image_bytes}],
+                generation_config=genai.GenerationConfig(temperature=0.1),
+                request_options={"timeout": _PROVIDER_TIMEOUT_SECONDS},
+            )
+            _last_gemini_call = time.time()
+            return response.text.strip()
+        except Exception as e:
+            logger.error(f"❌ Gemini generate_vision failed: {e}")
+            raise
+
     async def embed_text(self, text: str) -> list[float]:
         """Embeds text using Gemini's text-embedding model. See
         generate_text's docstring — same blocking-SDK-in-a-single-worker
@@ -154,6 +181,26 @@ class OpenAIProvider(AIProvider):
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=temperature,
+        )
+        return response.choices[0].message.content.strip()
+
+    async def generate_vision(self, prompt: str, image_bytes: bytes, mime: str) -> str:
+        """Prompt + one image via the standard image_url content part
+        (gpt-4o-mini accepts data: URLs). Same budget bucket as text."""
+        import base64
+        if not check_budget("openai", settings.openai_daily_limit):
+            raise BudgetExceededError("OpenAI daily budget exhausted")
+        data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode()}"
+        response = await self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }],
+            temperature=0.1,
         )
         return response.choices[0].message.content.strip()
 
@@ -264,6 +311,32 @@ class WaterfallAIProvider(AIProvider):
                 record_usage_event(f"{name}_fail")
                 last_error = e
         raise last_error or RuntimeError("All AI providers in the waterfall failed")
+
+    async def generate_vision(self, prompt: str, image_bytes: bytes, mime: str) -> str:
+        """
+        Same waterfall as generate_text, restricted to providers that can
+        take an image (currently Gemini and OpenAI — the OpenAI-compatible
+        chat fallbacks are text-only and are skipped by the hasattr check,
+        not by failing). Raises when no vision-capable provider succeeds so
+        the caller can tell the user to paste text instead.
+        """
+        last_error: Exception | None = None
+        attempted = False
+        for provider in self._chain:
+            vision = getattr(provider, "generate_vision", None)
+            if vision is None:
+                continue
+            attempted = True
+            try:
+                return await vision(prompt, image_bytes, mime)
+            except Exception as e:
+                name = getattr(provider, "name", type(provider).__name__)
+                logger.warning(f"⚠️  {name} vision failed ({type(e).__name__}: {e}) — trying next vision provider")
+                record_usage_event(f"{name}_fail")
+                last_error = e
+        if not attempted:
+            raise RuntimeError("No vision-capable AI provider is configured")
+        raise last_error or RuntimeError("All vision-capable AI providers failed")
 
     async def embed_text(self, text: str) -> list[float]:
         return await self._primary.embed_text(text)

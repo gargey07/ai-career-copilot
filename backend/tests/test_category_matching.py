@@ -246,6 +246,22 @@ def test_purge_removes_leaked_rows_but_keeps_protected_and_relevant_ones():
     assert db.deleted_ids == ["leak-plain"]
 
 
+def test_purge_never_deletes_user_submitted_jobs():
+    # A job the user added THEMSELVES (AI Application Review intake) is off
+    # the gate's jurisdiction even when it's categorically unrelated to
+    # their profile — "you chose it" outranks the gate's opinion.
+    off_category = {
+        "title": "Product Designer, AI Models", "description": "Figma, UX research.",
+        "search_category": None, "source": "user_submitted",
+    }
+    db = _PurgeFakeSupabase([
+        {"id": "user-added", "status": "matched", "applied_at": None, "application_status": None,
+         "feedback": None, "job_feedback": None, "jobs": off_category},
+    ])
+    assert _run_purge(db) == 0
+    assert db.deleted_ids is None
+
+
 def test_purge_never_blocks_matching_on_select_failure():
     db = _PurgeFakeSupabase([], select_error=RuntimeError("column does not exist"))
     assert _run_purge(db) == 0

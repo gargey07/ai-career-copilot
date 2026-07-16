@@ -20,6 +20,7 @@ _GOOD = {
     "strengths": ["FastAPI", "PostgreSQL"],
     "missing": ["AWS"],
     "risks": ["No production ML experience"],
+    "suggestions": ["Add your Docker project to your resume"],
     "reason": "Strong backend overlap with the core requirements.",
 }
 
@@ -74,6 +75,16 @@ def test_parse_normalizes_junk_fields():
 def test_parse_clamps_fit_score():
     assert parse_eval(json.dumps({**_GOOD, "fit_score": 250}))["fit_score"] == 100
     assert parse_eval(json.dumps({**_GOOD, "fit_score": -5}))["fit_score"] == 0
+
+
+def test_parse_suggestions_field():
+    # "Improve before applying" list — parsed like the other phrase lists.
+    result = parse_eval(json.dumps(_GOOD))
+    assert result["suggestions"] == ["Add your Docker project to your resume"]
+    # Absent or junk suggestions never break older stored evals.
+    without = {k: v for k, v in _GOOD.items() if k != "suggestions"}
+    assert parse_eval(json.dumps(without))["suggestions"] == []
+    assert parse_eval(json.dumps({**_GOOD, "suggestions": "not a list"}))["suggestions"] == []
 
 
 # ── evaluate_match failure contract ───────────────────────────────────────────
@@ -277,4 +288,27 @@ def test_on_demand_generation_never_blocked_by_skip(monkeypatch):
     # The verdict is stored (shows as a caution in the UI)…
     assert {rid for rid, _ in db.eval_updates()} == {"m1"}
     # …but the resume the user explicitly asked for is still generated.
+    assert [rid for rid, _ in db.resume_updates()] == ["m1"]
+
+
+def test_on_demand_generation_reuses_stored_eval(monkeypatch):
+    # The user already ran "Should I apply?" (or the add-a-job flow) on this
+    # match — Generate must NOT pay for the same recruiter eval twice.
+    db = _pipeline_db()
+    db.matches = [{
+        "id": "m1", "job_id": "j2", "rank": 1, "optimized_resume_text": None,
+        "recruiter_eval": {"verdict": "apply", "reason": "already evaluated"},
+    }]
+    _patch_optimizer(monkeypatch, db, verdicts={})
+
+    eval_calls = []
+    async def counting_eval(user, job):
+        eval_calls.append(job["title"])
+        return {"verdict": "apply", "fit_score": 50, "strengths": [], "missing": [], "risks": [], "reason": "test"}
+    monkeypatch.setattr(optimizer, "evaluate_match", counting_eval)
+
+    ok = asyncio.run(optimizer.run_optimizer_for_match("u1", "m1"))
+
+    assert ok is True
+    assert eval_calls == []  # stored eval reused — zero new AI spend
     assert [rid for rid, _ in db.resume_updates()] == ["m1"]

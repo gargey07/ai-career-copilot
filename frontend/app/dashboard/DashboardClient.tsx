@@ -34,6 +34,7 @@ interface Job {
   company: string;
   location: string;
   is_remote: boolean;
+  source?: string; // 'adzuna' | 'jsearch' | ... | 'user_submitted' (added via AddJobPanel)
   source_url: string;
   salary_min?: number | null;
   salary_max?: number | null;
@@ -57,6 +58,9 @@ interface RecruiterEval {
   strengths?: string[];
   missing?: string[];
   risks?: string[];
+  // "Improve before applying" — concrete qualitative actions only, never
+  // invented numbers ("+13% interview chance" is exactly what we refuse).
+  suggestions?: string[];
   reason?: string;
 }
 interface UserJob {
@@ -764,15 +768,81 @@ function RecruiterInsight({ evaluation }: { evaluation: RecruiterEval }) {
           ))}
         </div>
       )}
+      {(evaluation.suggestions || []).length > 0 && (
+        <div className="pt-1">
+          <p className="text-xs font-semibold mb-1" style={{ color: "var(--text)" }}>
+            Improve before applying
+          </p>
+          <ul className="space-y-0.5">
+            {(evaluation.suggestions || []).map((s, i) => (
+              <li key={`i-${i}`} className="text-xs leading-relaxed" style={{ color: "var(--text-muted)" }}>
+                → {s}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
+  );
+}
+
+// ── "Should I apply?" — on-demand recruiter analysis for matches the
+// pipeline didn't evaluate (it only evaluates the top few it generates
+// resumes for). One AI call, quota-gated server-side.
+function AnalyzeButton({ userId, token, matchId, onResult }: {
+  userId: string; token: string; matchId: string; onResult: (e: RecruiterEval) => void;
+}) {
+  const [state, setState] = useState<"idle" | "loading" | "capped" | "error">("idle");
+
+  const analyze = async () => {
+    setState("loading");
+    try {
+      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${matchId}/analyze?t=${encodeURIComponent(token)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (res.status === 429) { setState("capped"); return; }
+      if (!res.ok) { setState("error"); return; }
+      const data = await res.json();
+      if (data.recruiter_eval) onResult(data.recruiter_eval);
+      else setState("error");
+    } catch {
+      setState("error");
+    }
+  };
+
+  if (state === "capped") {
+    return (
+      <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+        Daily analysis allowance used — more tomorrow
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={analyze}
+      disabled={state === "loading"}
+      className="inline-flex items-center gap-1.5 text-xs font-medium hover:underline disabled:opacity-60"
+      style={{ color: "var(--primary)" }}
+      title="An AI recruiter reads this job against your resume and tells you whether it's worth applying"
+    >
+      <Sparkles size={13} strokeWidth={2} />
+      {state === "loading" ? "Asking the AI recruiter…" : state === "error" ? "Couldn't analyze — try again" : "Should I apply? Ask the AI recruiter"}
+    </button>
   );
 }
 
 // ── Job card ─────────────────────────────────────────────────────────────────────
 function JobCard({ match, index, userId, token }: { match: UserJob; index: number; userId: string; token: string }) {
   const job = match.jobs;
-  const hasApply = job.source_url && !job.source_url.includes("example.com");
+  // A user-submitted job's source_url may be a synthetic "user-submitted:…"
+  // placeholder (text/screenshot intake) — that's not a working apply link.
+  const hasApply = job.source_url && !job.source_url.includes("example.com") && /^https?:\/\//i.test(job.source_url);
   const salary = formatSalary(job);
+  // On-demand analysis lands here without a full dashboard refetch.
+  const [evaluation, setEvaluation] = useState<RecruiterEval | null>(match.recruiter_eval || null);
 
   // A resume was queued (has_optimized_resume) but never got a pdf_url:
   // either it's still in the narrow "generating" window (status still
@@ -802,10 +872,24 @@ function JobCard({ match, index, userId, token }: { match: UserJob; index: numbe
             {salary ?? "Salary not disclosed"}
           </p>
         </div>
-        <ScoreBadge score={match.match_score} />
+        {match.match_score != null ? (
+          <ScoreBadge score={match.match_score} />
+        ) : job.source === "user_submitted" ? (
+          // No pipeline score exists for a job the user brought themselves —
+          // showing a computed-looking % here would be exactly the fake
+          // statistic this product refuses. The recruiter verdict below is
+          // the real signal.
+          <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold" style={{ background: "var(--surface-muted)", color: "var(--text-muted)", border: "1px solid var(--border)" }}>
+            Added by you
+          </span>
+        ) : null}
       </div>
 
-      {match.recruiter_eval && <RecruiterInsight evaluation={match.recruiter_eval} />}
+      {evaluation ? (
+        <RecruiterInsight evaluation={evaluation} />
+      ) : (
+        <AnalyzeButton userId={userId} token={token} matchId={match.id} onResult={setEvaluation} />
+      )}
 
       <div className="flex flex-wrap gap-3">
         {match.pdf_url ? (
@@ -864,6 +948,299 @@ function JobCard({ match, index, userId, token }: { match: UserJob; index: numbe
           <NotRelevant userId={userId} token={token} match={match} />
         </div>
       </div>
+    </Card>
+  );
+}
+
+// ── AI Application Review — add a job YOU found, review it, then decide ───────
+// Three-step contract mirroring the resume-upload flow: extract → the user
+// REVIEWS/corrects what we read → confirm → recruiter verdict + CTAs.
+// Nothing is stored until the user confirms the details are right.
+type IntakeMode = "link" | "text" | "screenshot";
+
+interface JobDraft {
+  title: string;
+  company: string;
+  location: string;
+  description: string;
+  employment_type: string;
+  is_remote: boolean;
+}
+
+function AddJobPanel({ userId, token }: { userId: string; token: string }) {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<IntakeMode>("link");
+  const [step, setStep] = useState<"input" | "review" | "result">("input");
+  const [url, setUrl] = useState("");
+  const [text, setText] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [draft, setDraft] = useState<JobDraft>({ title: "", company: "", location: "", description: "", employment_type: "", is_remote: false });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<{ matchId: string; eval: RecruiterEval | null } | null>(null);
+
+  const extract = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const form = new FormData();
+      if (mode === "link") form.append("url", url.trim());
+      if (mode === "text") form.append("text", text);
+      if (mode === "screenshot" && file) form.append("image", file);
+      const res = await fetch(`${API_URL}/api/users/${userId}/job-intake/extract?t=${encodeURIComponent(token)}`, {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.detail || "Couldn't read that — try pasting the job text instead.");
+        return;
+      }
+      setDraft({
+        title: data.draft.title || "",
+        company: data.draft.company || "",
+        location: data.draft.location || "",
+        description: data.draft.description || "",
+        employment_type: data.draft.employment_type || "",
+        is_remote: !!data.draft.is_remote,
+      });
+      setStep("review");
+    } catch {
+      setError("Couldn't reach the server — try again in a moment.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirm = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch(`${API_URL}/api/users/${userId}/job-intake/confirm?t=${encodeURIComponent(token)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: draft.title,
+          company: draft.company || null,
+          location: draft.location || null,
+          description: draft.description,
+          employment_type: draft.employment_type || null,
+          is_remote: draft.is_remote,
+          url: mode === "link" ? url.trim() || null : null,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.detail || "Couldn't save that job — try again in a moment.");
+        return;
+      }
+      setResult({ matchId: data.match_id, eval: data.recruiter_eval || null });
+      setStep("result");
+      // The new match now exists server-side — refetch so its card (with
+      // cover letter / applied / feedback actions) appears below.
+      window.dispatchEvent(new Event(REFRESH_EVENT));
+    } catch {
+      setError("Couldn't reach the server — try again in a moment.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reset = () => {
+    setStep("input");
+    setUrl("");
+    setText("");
+    setFile(null);
+    setResult(null);
+    setError("");
+  };
+
+  const canExtract =
+    (mode === "link" && url.trim().length > 8) ||
+    (mode === "text" && text.trim().length > 40) ||
+    (mode === "screenshot" && !!file);
+
+  const inputStyle = { background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)" } as const;
+
+  if (!open) {
+    return (
+      <Card className="p-5 mb-10 animate-fade-in">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-bold" style={{ color: "var(--text)" }}>Found a job somewhere else?</h2>
+            <p className="text-sm mt-0.5" style={{ color: "var(--text-muted)" }}>
+              Paste its link, text, or a screenshot — the AI recruiter checks whether it&apos;s worth applying before you spend a resume on it.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-semibold text-white transition hover:opacity-90"
+            style={{ background: "var(--primary)" }}
+          >
+            <Sparkles size={16} strokeWidth={1.75} />
+            Check a job
+          </button>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="p-6 mb-10 space-y-4 animate-fade-in">
+      <div className="flex items-center justify-between">
+        <h2 className="text-base font-bold" style={{ color: "var(--text)" }}>
+          {step === "input" ? "Check a job you found" : step === "review" ? "Is this correct?" : "The recruiter's verdict"}
+        </h2>
+        <button type="button" onClick={() => { reset(); setOpen(false); }} className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
+          Close
+        </button>
+      </div>
+
+      {step === "input" && (
+        <>
+          <div className="flex gap-2">
+            {([["link", "Paste a link"], ["text", "Paste the text"], ["screenshot", "Upload a screenshot"]] as [IntakeMode, string][]).map(([m, label]) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => { setMode(m); setError(""); }}
+                className="px-3 py-1.5 rounded-full text-xs font-medium border transition"
+                style={mode === m
+                  ? { background: "var(--primary)", color: "#fff", borderColor: "var(--primary)" }
+                  : { borderColor: "var(--border)", color: "var(--text-muted)" }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {mode === "link" && (
+            <input
+              type="url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://… the job posting's page"
+              className="w-full px-3 py-2.5 rounded-md text-sm outline-none"
+              style={inputStyle}
+            />
+          )}
+          {mode === "text" && (
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Paste the whole job posting here — title, company, requirements, everything."
+              rows={6}
+              className="w-full px-3 py-2.5 rounded-md text-sm outline-none resize-y"
+              style={inputStyle}
+            />
+          )}
+          {mode === "screenshot" && (
+            <div>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+                className="w-full text-sm"
+                style={{ color: "var(--text-muted)" }}
+              />
+              <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+                PNG, JPEG or WebP, up to 5MB. Crop to just the job posting for the best read.
+              </p>
+            </div>
+          )}
+
+          {error && <p className="text-sm" style={{ color: "var(--coral)" }}>{error}</p>}
+
+          <button
+            type="button"
+            onClick={extract}
+            disabled={!canExtract || busy}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
+            style={{ background: "var(--primary)" }}
+          >
+            {busy ? "Reading the job…" : "Read this job"}
+          </button>
+        </>
+      )}
+
+      {step === "review" && (
+        <>
+          <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+            Here&apos;s what we read — fix anything that&apos;s wrong before the analysis. The verdict is only as good as these details.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Job title *</label>
+              <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} className="w-full mt-1 px-3 py-2 rounded-md text-sm outline-none" style={inputStyle} />
+            </div>
+            <div>
+              <label className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Company</label>
+              <input value={draft.company} onChange={(e) => setDraft({ ...draft, company: e.target.value })} className="w-full mt-1 px-3 py-2 rounded-md text-sm outline-none" style={inputStyle} />
+            </div>
+            <div>
+              <label className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Location</label>
+              <input value={draft.location} onChange={(e) => setDraft({ ...draft, location: e.target.value })} className="w-full mt-1 px-3 py-2 rounded-md text-sm outline-none" style={inputStyle} />
+            </div>
+            <div className="flex items-end pb-2">
+              <label className="inline-flex items-center gap-2 text-sm" style={{ color: "var(--text)" }}>
+                <input type="checkbox" checked={draft.is_remote} onChange={(e) => setDraft({ ...draft, is_remote: e.target.checked })} />
+                Remote job
+              </label>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Job description *</label>
+            <textarea
+              value={draft.description}
+              onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+              rows={7}
+              className="w-full mt-1 px-3 py-2 rounded-md text-sm outline-none resize-y"
+              style={inputStyle}
+            />
+          </div>
+
+          {error && <p className="text-sm" style={{ color: "var(--coral)" }}>{error}</p>}
+
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={confirm}
+              disabled={busy || !draft.title.trim() || !draft.description.trim()}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
+              style={{ background: "var(--primary)" }}
+            >
+              <Sparkles size={16} strokeWidth={1.75} />
+              {busy ? "Asking the AI recruiter…" : "Looks right — analyze it"}
+            </button>
+            <button type="button" onClick={reset} className="text-sm hover:underline self-center" style={{ color: "var(--text-muted)" }}>
+              Start over
+            </button>
+          </div>
+        </>
+      )}
+
+      {step === "result" && result && (
+        <>
+          {result.eval ? (
+            <RecruiterInsight evaluation={result.eval} />
+          ) : (
+            <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+              The job is saved, but the AI recruiter is busy right now — its card below has an
+              &quot;Ask the AI recruiter&quot; button to try again in a minute.
+            </p>
+          )}
+          <div className="flex flex-wrap items-center gap-3">
+            <GenerateResumeButton userId={userId} token={token} matchId={result.matchId} />
+            <button type="button" onClick={reset} className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
+              Check another job
+            </button>
+          </div>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            This job now lives under &quot;Jobs you added&quot; below — cover letter, apply tracking and feedback are all on its card.
+          </p>
+        </>
+      )}
     </Card>
   );
 }
@@ -1256,7 +1633,15 @@ function DashboardContent() {
   // applications tracker below deliberately stays unfiltered.
   const visibleJobs = locationFilter ? allJobs.filter(matchesLocation) : allJobs;
 
-  const todayMatches = visibleJobs.filter((j) => j.digest_date === today);
+  // Jobs the user added themselves (AddJobPanel) get their own section —
+  // mixing them into "Today's matches" would present the user's own
+  // submission as something we found for them.
+  const userAddedJobs = visibleJobs
+    .filter((j) => j.jobs.source === "user_submitted")
+    .sort((a, b) => (b.digest_date || "").localeCompare(a.digest_date || ""));
+  const pipelineJobs = visibleJobs.filter((j) => j.jobs.source !== "user_submitted");
+
+  const todayMatches = pipelineJobs.filter((j) => j.digest_date === today);
   const jobsFound = todayMatches.length;
   // Ready resumes stay useful across days — count (and filter) all of them,
   // not just today's.
@@ -1287,7 +1672,7 @@ function DashboardContent() {
   // the 5 most recent dates to keep the page light. Same JobCard as today
   // (feedback/apply/retry are per-match, so they all keep working).
   const historyByDate = new Map<string, UserJob[]>();
-  for (const j of visibleJobs) {
+  for (const j of pipelineJobs) {
     if (!j.digest_date || j.digest_date === today) continue;
     const list = historyByDate.get(j.digest_date) || [];
     list.push(j);
@@ -1388,6 +1773,10 @@ function DashboardContent() {
           <DigestTimePicker userId={user.id} token={token} currentTime={user.preferred_digest_time} />
         </div>
 
+        {/* AI Application Review — bring a job from anywhere, get the
+            recruiter's verdict before spending a resume generation on it. */}
+        <AddJobPanel userId={user.id} token={token} />
+
         {/* One-time location filter — narrows the view only, never the
             saved preferences. Options come from the loaded jobs, so it
             only appears once there's something to filter. */}
@@ -1447,6 +1836,22 @@ function DashboardContent() {
           </>
         ) : (
           <>
+            {/* Jobs the user brought themselves — their own section, never
+                presented as something we found for them. */}
+            {userAddedJobs.length > 0 && (
+              <div className="mb-10">
+                <h2 className="text-lg font-semibold mb-1" style={{ color: "var(--text)" }}>Jobs you added</h2>
+                <p className="text-sm mb-4" style={{ color: "var(--text-muted)" }}>
+                  Postings you brought in yourself, with the AI recruiter&apos;s take on each.
+                </p>
+                <div className="space-y-4">
+                  {userAddedJobs.map((m, i) => (
+                    <JobCard key={m.id} match={m} index={i} userId={user.id} token={token} />
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Today's jobs */}
             <h2 className="text-lg font-semibold mb-4" style={{ color: "var(--text)" }}>Today&apos;s matches</h2>
             {todayMatches.length > 0 ? (

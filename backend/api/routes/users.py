@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 
 from core.access_token import generate_dashboard_token, verify_dashboard_token
@@ -137,7 +137,7 @@ async def get_dashboard(user_id: str, t: str = Query("", description="Signed das
     # itself is never shipped to the dashboard (see the transform below).
     jobs_fields = (
         "id, match_score, pdf_url, digest_date, status, applied_at, optimized_resume_text, cover_letter_text, "
-        "jobs(id, title, company, location, is_remote, source_url, salary_min, salary_max, currency)"
+        "jobs(id, title, company, location, is_remote, source, source_url, salary_min, salary_max, currency)"
     )
     jobs_resp = None
     for extra in (", feedback, feedback_reason, job_feedback, job_feedback_reason, application_status, match_breakdown, recruiter_eval",
@@ -601,3 +601,274 @@ async def retry_pdf(user_id: str, match_id: str, background_tasks: BackgroundTas
     from core.pdf_generator import generate_pdf_for_match
     background_tasks.add_task(generate_pdf_for_match, match_id)
     return {"status": "started", "message": "Retrying — this can take up to a minute."}
+
+
+# ── AI Application Review — add your own job, review it, then decide ──────────
+# The advisor-workflow feature: instead of only analyzing jobs the pipeline
+# fetched, a user can bring a job THEY found (link / screenshot / pasted
+# text), review what we extracted from it, and get the recruiter verdict +
+# improvement suggestions BEFORE spending a resume generation on it.
+
+_JOB_ANALYSIS_BUDGET_MSG = (
+    "You've used today's job-analysis allowance — more unlock tomorrow."
+)
+
+# Magic-byte sniffing, same never-trust-the-extension rule as resume uploads
+# (resumes.py _sniff_extension). WebP is RIFF????WEBP — bytes 0-3 and 8-11.
+_IMAGE_SIGNATURES = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+)
+_MAX_IMAGE_BYTES = 5 * 1024 * 1024  # same 5MB cap as resume uploads
+
+
+def _sniff_image_mime(content: bytes) -> str | None:
+    for signature, mime in _IMAGE_SIGNATURES:
+        if content.startswith(signature):
+            return mime
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+async def _run_recruiter_eval(supabase, user_id: str, job: dict, match_id: str) -> dict | None:
+    """Shared by confirm + analyze: run the eval, persist it on the match
+    row (best-effort, same contract as optimizer._store_recruiter_eval)."""
+    user_resp = (
+        supabase.table("users")
+        .select("resume_text, target_roles, experience_level")
+        .eq("id", user_id)
+        .single()
+        .execute()
+    )
+    from core.recruiter import evaluate_match
+    eval_result = await evaluate_match(user_resp.data or {}, job)
+    if eval_result is not None:
+        try:
+            supabase.table("user_jobs").update({"recruiter_eval": eval_result}).eq("id", match_id).execute()
+        except Exception as e:
+            logger.info(f"   Couldn't store recruiter_eval ({e}) — run the recruiter_eval column migration.")
+    return eval_result
+
+
+@router.post("/{user_id}/job-intake/extract")
+async def job_intake_extract(
+    user_id: str,
+    t: str = Query(""),
+    url: str = Form(""),
+    text: str = Form(""),
+    image: UploadFile | None = File(None),
+):
+    """
+    Step 1 of add-a-job: raw material (link / pasted text / screenshot) →
+    structured draft for the user to REVIEW. Writes nothing to the
+    database — the user hasn't confirmed anything yet.
+    """
+    _require_dashboard_token(user_id, t)
+
+    if not check_budget(f"job_analysis_{user_id}", settings.job_analyses_per_user_daily):
+        raise HTTPException(429, _JOB_ANALYSIS_BUDGET_MSG)
+
+    url = (url or "").strip()
+    raw_text = (text or "").strip()
+
+    from core.job_intake import extract_job_draft, extract_text_from_image
+
+    # Source priority: pasted text is what the user deliberately gave us;
+    # a URL fetch is free; the vision call is the most expensive and least
+    # reliable, so it's last.
+    if not raw_text and url:
+        from jobs.fetchers import fetch_job_page_text
+        raw_text = await fetch_job_page_text(url)
+
+    if not raw_text and image is not None:
+        content = await image.read()
+        if len(content) > _MAX_IMAGE_BYTES:
+            raise HTTPException(400, "That screenshot is over 5MB — crop it to just the job posting.")
+        mime = _sniff_image_mime(content)
+        if mime is None:
+            raise HTTPException(400, "That file doesn't look like a PNG, JPEG, or WebP image.")
+        raw_text = await extract_text_from_image(content, mime) or ""
+        if not raw_text:
+            raise HTTPException(
+                422, "We couldn't read the screenshot — paste the job description text instead."
+            )
+
+    if not raw_text:
+        raise HTTPException(
+            400,
+            "We couldn't read anything from that — paste the job description text instead.",
+        )
+
+    draft = await extract_job_draft(raw_text)
+    if draft is None:
+        raise HTTPException(
+            503, "The AI reader is busy right now — try again in a minute, or paste the details manually."
+        )
+
+    # Which fields need the user's attention on the review screen.
+    missing = [k for k in ("title", "company", "location") if not draft.get(k)]
+    return {"status": "ok", "draft": draft, "missing": missing, "url": url or None}
+
+
+class JobConfirmRequest(BaseModel):
+    title: str
+    description: str
+    company: str | None = None
+    location: str | None = None
+    url: str | None = None
+    salary_min: int | None = None
+    salary_max: int | None = None
+    employment_type: str | None = None
+    is_remote: bool = False
+
+
+@router.post("/{user_id}/job-intake/confirm")
+async def job_intake_confirm(user_id: str, payload: JobConfirmRequest, t: str = Query("")):
+    """
+    Step 2 of add-a-job: the user has reviewed/corrected the extracted
+    details. Store the job + match, run the recruiter analysis, and hand
+    back the verdict — the Generate Resume / Cover Letter CTAs then use
+    the returned match_id against the existing endpoints.
+    """
+    _require_dashboard_token(user_id, t)
+
+    title = (payload.title or "").strip()
+    description = (payload.description or "").strip()
+    if not title or not description:
+        raise HTTPException(400, "The job needs at least a title and its description text.")
+
+    if not check_budget(f"job_analysis_{user_id}", settings.job_analyses_per_user_daily):
+        raise HTTPException(429, _JOB_ANALYSIS_BUDGET_MSG)
+
+    supabase = get_supabase()
+    url = (payload.url or "").strip()
+
+    # Reuse the fetched-jobs row when this URL is already in the job store
+    # (source_url is the global dedup key) — the analysis then attaches to
+    # the same job every other user's matches reference.
+    job_row = None
+    if url:
+        existing = supabase.table("jobs").select("*").eq("source_url", url).execute()
+        if existing.data:
+            job_row = existing.data[0]
+
+    if job_row is None:
+        from uuid import uuid4
+        from jobs.fetchers import normalize_job
+        new_id = str(uuid4())
+        job = normalize_job(
+            source="user_submitted",
+            external_id=new_id,
+            title=title,
+            company=(payload.company or "").strip(),
+            location=(payload.location or "").strip(),
+            description=description,
+            # source_url is UNIQUE NOT NULL — text/screenshot submissions
+            # get a synthetic one so two users pasting the same text don't
+            # collide on an empty string.
+            source_url=url or f"user-submitted:{new_id}",
+            salary_min=payload.salary_min,
+            salary_max=payload.salary_max,
+            employment_type=(payload.employment_type or "").strip() or None,
+            is_remote=payload.is_remote,
+        )
+        try:
+            inserted = supabase.table("jobs").insert(job).execute()
+            job_row = (inserted.data or [None])[0]
+        except Exception:
+            # Lost a race on source_url (two tabs, or another user adding
+            # the same posting) — the row exists now, use it.
+            if url:
+                existing = supabase.table("jobs").select("*").eq("source_url", url).execute()
+                job_row = (existing.data or [None])[0]
+        if job_row is None:
+            raise HTTPException(500, "Couldn't save that job — try again in a moment.")
+
+    # One match row per user+job+day (same key the pipeline upserts on).
+    from datetime import date as _date
+    today = _date.today().isoformat()
+    existing_match = (
+        supabase.table("user_jobs")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("job_id", job_row["id"])
+        .eq("digest_date", today)
+        .execute()
+    )
+    if existing_match.data:
+        match_id = existing_match.data[0]["id"]
+    else:
+        created = (
+            supabase.table("user_jobs")
+            .insert({
+                "user_id": user_id,
+                "job_id": job_row["id"],
+                "digest_date": today,
+                "status": "matched",
+                # match_score deliberately left NULL: no pipeline scoring ran
+                # for this pair, and the recruiter verdict below is the honest
+                # surface — never a made-up percentage.
+            })
+            .execute()
+        )
+        if not created.data:
+            raise HTTPException(500, "Couldn't save that job — try again in a moment.")
+        match_id = created.data[0]["id"]
+
+    eval_result = await _run_recruiter_eval(supabase, user_id, job_row, match_id)
+    return {
+        "status": "ok",
+        "match_id": match_id,
+        "job": {
+            "id": job_row["id"],
+            "title": job_row.get("title"),
+            "company": job_row.get("company"),
+            "location": job_row.get("location"),
+            "source": job_row.get("source"),
+        },
+        "recruiter_eval": eval_result,
+        "eval_pending": eval_result is None,
+    }
+
+
+class AnalyzeRequest(BaseModel):
+    regenerate: bool = False
+
+
+@router.post("/{user_id}/matches/{match_id}/analyze")
+async def analyze_match(user_id: str, match_id: str, payload: AnalyzeRequest, t: str = Query("")):
+    """
+    On-demand recruiter analysis for a pipeline-found match. The pipeline
+    only evaluates the top few matches it generates resumes for — this
+    lets the user ask "should I apply?" about any other job on their
+    dashboard BEFORE spending a resume generation on it.
+    """
+    _require_dashboard_token(user_id, t)
+    supabase = get_supabase()
+
+    owns = (
+        supabase.table("user_jobs")
+        .select("id, job_id, recruiter_eval")
+        .eq("id", match_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not owns.data:
+        raise HTTPException(404, "Match not found.")
+    row = owns.data[0]
+
+    if row.get("recruiter_eval") and not payload.regenerate:
+        return {"status": "ok", "recruiter_eval": row["recruiter_eval"], "cached": True}
+
+    if not check_budget(f"job_analysis_{user_id}", settings.job_analyses_per_user_daily):
+        raise HTTPException(429, _JOB_ANALYSIS_BUDGET_MSG)
+
+    job_resp = supabase.table("jobs").select("title, company, description").eq("id", row["job_id"]).single().execute()
+    if not job_resp.data:
+        raise HTTPException(404, "The job posting for this match is no longer available.")
+
+    eval_result = await _run_recruiter_eval(supabase, user_id, job_resp.data, match_id)
+    if eval_result is None:
+        raise HTTPException(503, "The AI recruiter is busy right now — try again in a minute.")
+    return {"status": "ok", "recruiter_eval": eval_result, "cached": False}

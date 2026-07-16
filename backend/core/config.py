@@ -146,6 +146,12 @@ class Settings(BaseSettings):
     # provider budget by hammering Generate.
     on_demand_resume_bonus_per_day: int = 2      # extra resumes beyond the pipeline quota
     cover_letters_per_user_daily: int = 3
+    # AI Application Review — user-triggered job analyses (the add-a-job
+    # intake flow AND the per-match "Analyze" button share this bucket).
+    # Worst case one added job = extract call + eval call (+ vision for a
+    # screenshot), so 10 clicks ≈ 20-30 AI calls/user/day, still budget-
+    # guarded per provider on top of this.
+    job_analyses_per_user_daily: int = 10
     # Resume style preview (POST /api/resumes/preview) — no AI/Chromium
     # involved, cheap, but unauthenticated (fires pre-account during
     # onboarding), so still worth a sane per-IP daily ceiling.

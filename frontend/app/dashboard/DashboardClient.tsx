@@ -83,6 +83,9 @@ interface UserJob {
   application_status?: string | null;
   match_breakdown?: MatchBreakdown | null;
   recruiter_eval?: RecruiterEval | null;
+  // Fit Check round: "Save for later" shortlist + the user's own notes.
+  saved_at?: string | null;
+  user_notes?: string | null;
 }
 
 // Salary display — only ever real source-API numbers; most boards don't
@@ -430,6 +433,8 @@ function GenerateResumeButton({ userId, token, matchId }: { userId: string; toke
 function CoverLetterButton({ userId, token, match }: { userId: string; token: string; match: UserJob }) {
   const [open, setOpen] = useState(false);
   const [letter, setLetter] = useState<string | null>(null);
+  // What the server currently has — edits are persisted when they differ.
+  const [serverLetter, setServerLetter] = useState<string | null>(null);
   const [state, setState] = useState<"idle" | "loading" | "capped" | "error">("idle");
   const [copied, setCopied] = useState(false);
 
@@ -451,10 +456,26 @@ function CoverLetterButton({ userId, token, match }: { userId: string; token: st
       }
       const data = await res.json();
       setLetter(data.cover_letter);
+      setServerLetter(data.cover_letter);
       setState("idle");
     } catch {
       setState("error");
     }
+  };
+
+  // Persist edits — no one sends 100% AI-written text, and losing tweaks on
+  // every close forced users to redo them. Best-effort: a failed save keeps
+  // the text in the box, so nothing is lost mid-session.
+  const persistEdits = async () => {
+    if (!letter || letter === serverLetter || !letter.trim()) return;
+    try {
+      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${match.id}/cover-letter?t=${encodeURIComponent(token)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: letter }),
+      });
+      if (res.ok) setServerLetter(letter);
+    } catch { /* keep local text; next copy/close retries */ }
   };
 
   const openModal = () => {
@@ -462,8 +483,14 @@ function CoverLetterButton({ userId, token, match }: { userId: string; token: st
     if (!letter) fetchLetter(false);
   };
 
+  const close = () => {
+    persistEdits();
+    setOpen(false);
+  };
+
   const copy = async () => {
     if (!letter) return;
+    persistEdits();
     try {
       await navigator.clipboard.writeText(letter);
       setCopied(true);
@@ -486,7 +513,7 @@ function CoverLetterButton({ userId, token, match }: { userId: string; token: st
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: "rgba(15,47,58,0.45)" }}
-          onClick={() => setOpen(false)}
+          onClick={close}
           role="dialog"
           aria-modal="true"
           aria-label="Cover letter"
@@ -500,7 +527,7 @@ function CoverLetterButton({ userId, token, match }: { userId: string; token: st
               <h3 className="font-bold" style={{ color: "var(--text)" }}>
                 Cover letter — {match.jobs.title} at {match.jobs.company}
               </h3>
-              <button type="button" onClick={() => setOpen(false)} className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
+              <button type="button" onClick={close} className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
                 Close
               </button>
             </div>
@@ -513,8 +540,8 @@ function CoverLetterButton({ userId, token, match }: { userId: string; token: st
             ) : letter ? (
               <>
                 <textarea
-                  readOnly
                   value={letter}
+                  onChange={(e) => setLetter(e.target.value)}
                   className="w-full flex-1 min-h-[260px] rounded-md p-3 text-sm leading-relaxed outline-none resize-y"
                   style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)" }}
                 />
@@ -538,7 +565,7 @@ function CoverLetterButton({ userId, token, match }: { userId: string; token: st
                   </button>
                 </div>
                 <p className="text-xs mt-2" style={{ color: "var(--text-muted)" }}>
-                  AI-drafted from your real resume — read it over and make it yours before sending.
+                  AI-drafted from your real resume — edit it right here to make it yours; your changes are saved automatically.
                 </p>
               </>
             ) : null}
@@ -815,7 +842,7 @@ function AnalyzeButton({ userId, token, matchId, onResult }: {
   if (state === "capped") {
     return (
       <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-        Daily analysis allowance used — more tomorrow
+        Daily Fit Check allowance used — more tomorrow
       </span>
     );
   }
@@ -829,8 +856,251 @@ function AnalyzeButton({ userId, token, matchId, onResult }: {
       title="An AI recruiter reads this job against your resume and tells you whether it's worth applying"
     >
       <Sparkles size={13} strokeWidth={2} />
-      {state === "loading" ? "Asking the AI recruiter…" : state === "error" ? "Couldn't analyze — try again" : "Should I apply? Ask the AI recruiter"}
+      {state === "loading" ? "Running Fit Check…" : state === "error" ? "Couldn't run it — try again" : "Run Fit Check"}
     </button>
+  );
+}
+
+// ── Save for later — shortlist toggle, same user-asserted pattern as Applied ──
+function SaveButton({ userId, token, match, compact }: { userId: string; token: string; match: UserJob; compact?: boolean }) {
+  const [saved, setSaved] = useState(!!match.saved_at);
+  const [busy, setBusy] = useState(false);
+
+  const toggle = async () => {
+    const next = !saved;
+    setSaved(next); // optimistic — revert on failure
+    setBusy(true);
+    try {
+      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${match.id}/save?t=${encodeURIComponent(token)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ saved: next }),
+      });
+      if (!res.ok) setSaved(!next);
+    } catch {
+      setSaved(!next);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      disabled={busy}
+      className={compact
+        ? "text-xs font-medium hover:underline disabled:opacity-60"
+        : "inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-semibold transition hover:bg-[var(--surface-muted)] disabled:opacity-60"}
+      style={saved
+        ? { ...(compact ? {} : { border: "1px solid var(--primary)" }), color: "var(--primary)" }
+        : { ...(compact ? {} : { border: "1px solid var(--border)" }), color: "var(--text-muted)" }}
+      title={saved ? "Remove from your saved list" : "Save this job to decide later"}
+    >
+      {saved ? "Saved ✓" : "Save for later"}
+    </button>
+  );
+}
+
+// ── Decision notes — the user's own memory on a job, context no AI has ────────
+function NotesEditor({ userId, token, match }: { userId: string; token: string; match: UserJob }) {
+  const [text, setText] = useState(match.user_notes || "");
+  const [savedText, setSavedText] = useState(match.user_notes || "");
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+
+  const save = async () => {
+    if (text.trim() === savedText.trim()) return;
+    setState("saving");
+    try {
+      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${match.id}/notes?t=${encodeURIComponent(token)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (res.ok) {
+        setSavedText(text);
+        setState("saved");
+        setTimeout(() => setState("idle"), 2000);
+      } else {
+        setState("error");
+      }
+    } catch {
+      setState("error");
+    }
+  };
+
+  return (
+    <div>
+      <label className="text-xs font-semibold" style={{ color: "var(--text)" }}>Your notes</label>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={save}
+        placeholder="Anything worth remembering — 'recruiter messaged me', 'referral from a friend', 'follow up Friday'…"
+        rows={2}
+        maxLength={2000}
+        className="w-full mt-1 px-3 py-2 rounded-md text-sm outline-none resize-y"
+        style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)" }}
+      />
+      <p className="text-xs mt-0.5" style={{ color: state === "error" ? "var(--coral)" : "var(--text-muted)" }}>
+        {state === "saving" ? "Saving…" : state === "saved" ? "Saved ✓" : state === "error" ? "Couldn't save — edit again to retry" : "Only you see this."}
+      </p>
+    </div>
+  );
+}
+
+// ── Fit Check modal — the Decision Center: one job, one screen, one decision ──
+function FitCheckModal({ userId, token, match, evaluation, onClose }: {
+  userId: string; token: string; match: UserJob; evaluation: RecruiterEval; onClose: () => void;
+}) {
+  const job = match.jobs;
+  const salary = formatSalary(job);
+  const hasApply = job.source_url && !job.source_url.includes("example.com") && /^https?:\/\//i.test(job.source_url);
+  const [skipped, setSkipped] = useState(match.job_feedback === "not_relevant");
+
+  const skip = async () => {
+    try {
+      await fetch(`${API_URL}/api/users/${userId}/matches/${match.id}/job-feedback?t=${encodeURIComponent(token)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "" }),
+      });
+      setSkipped(true);
+    } finally {
+      onClose();
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "rgba(15,47,58,0.45)" }}
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Fit Check — ${job.title} at ${job.company}`}
+    >
+      <div
+        className="w-full max-w-xl rounded-lg p-6 max-h-[88vh] overflow-y-auto space-y-4"
+        style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--primary)" }}>Fit Check</p>
+            <h3 className="text-lg font-bold mt-0.5" style={{ color: "var(--text)" }}>{job.title}</h3>
+            <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+              {job.company}
+              {job.location && ` · ${job.location}`}
+              {job.is_remote && " · Remote"}
+            </p>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{salary ?? "Salary not disclosed"}</p>
+          </div>
+          <button type="button" onClick={onClose} className="text-sm hover:underline shrink-0" style={{ color: "var(--text-muted)" }}>
+            Close
+          </button>
+        </div>
+
+        <RecruiterInsight evaluation={evaluation} />
+
+        <NotesEditor userId={userId} token={token} match={match} />
+
+        <div className="flex flex-wrap gap-3 pt-1">
+          {match.pdf_url ? (
+            <a
+              href={match.pdf_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-semibold text-white transition hover:opacity-90"
+              style={{ background: "var(--primary)" }}
+            >
+              <Download size={16} strokeWidth={1.75} />
+              View Tailored Resume
+            </a>
+          ) : (
+            <GenerateResumeButton userId={userId} token={token} matchId={match.id} />
+          )}
+          <CoverLetterButton userId={userId} token={token} match={match} />
+          {hasApply && (
+            <a
+              href={`${API_URL}/r/${match.id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-semibold transition hover:bg-[var(--surface-muted)]"
+              style={{ border: "1px solid var(--border)", color: "var(--text)" }}
+            >
+              <ExternalLink size={16} strokeWidth={1.75} />
+              Apply Now
+            </a>
+          )}
+          <SaveButton userId={userId} token={token} match={match} />
+          <AppliedButton userId={userId} token={token} match={match} />
+        </div>
+
+        {!skipped && (
+          <button type="button" onClick={skip} className="text-xs hover:underline" style={{ color: "var(--text-muted)" }}>
+            Skip this job — don&apos;t show me jobs like it
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Skill Gap Insights — aggregate what the Fit Checks keep flagging ──────────
+// Pure aggregation of stored eval data: real counts, zero AI calls, and no
+// projected "+X% if you fix this" (that number would be invented).
+function SkillGapInsights({ jobs, token }: { jobs: UserJob[]; token: string }) {
+  const evals = jobs.filter((j) => j.recruiter_eval?.verdict);
+  if (evals.length < 3) return null; // below this the counts are noise
+
+  const counts = new Map<string, { label: string; count: number }>();
+  for (const j of evals) {
+    // One vote per skill per job, even if it appears in missing AND risks.
+    const seen = new Set<string>();
+    for (const raw of j.recruiter_eval!.missing || []) {
+      const label = raw.trim();
+      const key = label.toLowerCase();
+      if (!label || seen.has(key)) continue;
+      seen.add(key);
+      const entry = counts.get(key);
+      if (entry) entry.count += 1;
+      else counts.set(key, { label, count: 1 });
+    }
+  }
+  const top = Array.from(counts.values())
+    .filter((e) => e.count >= 2) // one-off mentions aren't a pattern
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+  if (top.length === 0) return null;
+
+  return (
+    <Card className="p-5 mb-6 animate-fade-in">
+      <div className="flex items-center gap-2 mb-1">
+        <Target size={18} strokeWidth={1.75} style={{ color: "var(--primary)" }} />
+        <h2 className="text-base font-bold" style={{ color: "var(--text)" }}>Skill gaps across your Fit Checks</h2>
+      </div>
+      <p className="text-sm mb-3" style={{ color: "var(--text-muted)" }}>
+        What the AI recruiter kept flagging across {evals.length} analyzed jobs — closing the top one strengthens most of your applications.
+      </p>
+      <div className="space-y-2">
+        {top.map((e) => (
+          <div key={e.label} className="flex items-center justify-between gap-3">
+            <span className="text-sm font-medium" style={{ color: "var(--text)" }}>{e.label}</span>
+            <span className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>
+              flagged in {e.count} of {evals.length}
+            </span>
+          </div>
+        ))}
+      </div>
+      <a
+        href={`/profile?t=${encodeURIComponent(token)}`}
+        className="inline-block mt-3 text-sm font-medium hover:underline"
+        style={{ color: "var(--primary)" }}
+      >
+        Already have one of these? Add it to your profile →
+      </a>
+    </Card>
   );
 }
 
@@ -843,6 +1113,8 @@ function JobCard({ match, index, userId, token }: { match: UserJob; index: numbe
   const salary = formatSalary(job);
   // On-demand analysis lands here without a full dashboard refetch.
   const [evaluation, setEvaluation] = useState<RecruiterEval | null>(match.recruiter_eval || null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const verdictStyle = evaluation ? VERDICT_STYLES[(evaluation.verdict || "").toLowerCase()] : undefined;
 
   // A resume was queued (has_optimized_resume) but never got a pdf_url:
   // either it's still in the narrow "generating" window (status still
@@ -885,10 +1157,36 @@ function JobCard({ match, index, userId, token }: { match: UserJob; index: numbe
         ) : null}
       </div>
 
-      {evaluation ? (
-        <RecruiterInsight evaluation={evaluation} />
+      {/* Compact Fit Check row — the full analysis lives in the modal, which
+          keeps cards short (especially on phones, where the old inline block
+          made every card a wall of chips). */}
+      {evaluation && verdictStyle ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <span
+            className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold"
+            style={{ background: verdictStyle.bg, color: verdictStyle.color, border: `1px solid ${verdictStyle.border}` }}
+          >
+            {verdictStyle.label}
+          </span>
+          <button
+            type="button"
+            onClick={() => setReviewOpen(true)}
+            className="text-xs font-medium hover:underline"
+            style={{ color: "var(--primary)" }}
+          >
+            View Fit Check →
+          </button>
+        </div>
       ) : (
-        <AnalyzeButton userId={userId} token={token} matchId={match.id} onResult={setEvaluation} />
+        <AnalyzeButton
+          userId={userId}
+          token={token}
+          matchId={match.id}
+          onResult={(e) => { setEvaluation(e); setReviewOpen(true); }}
+        />
+      )}
+      {reviewOpen && evaluation && (
+        <FitCheckModal userId={userId} token={token} match={match} evaluation={evaluation} onClose={() => setReviewOpen(false)} />
       )}
 
       <div className="flex flex-wrap gap-3">
@@ -933,6 +1231,7 @@ function JobCard({ match, index, userId, token }: { match: UserJob; index: numbe
           </span>
         )}
 
+        <SaveButton userId={userId} token={token} match={match} />
         <AppliedButton userId={userId} token={token} match={match} />
         {(match.status === "applied" || match.applied_at) && (
           <ApplicationStatusSelect userId={userId} token={token} match={match} />
@@ -1069,7 +1368,7 @@ function AddJobPanel({ userId, token }: { userId: string; token: string }) {
           <div>
             <h2 className="text-base font-bold" style={{ color: "var(--text)" }}>Found a job somewhere else?</h2>
             <p className="text-sm mt-0.5" style={{ color: "var(--text-muted)" }}>
-              Paste its link, text, or a screenshot — the AI recruiter checks whether it&apos;s worth applying before you spend a resume on it.
+              Paste its link, text, or a screenshot — the AI recruiter runs a Fit Check before you spend a resume on it.
             </p>
           </div>
           <button
@@ -1079,7 +1378,7 @@ function AddJobPanel({ userId, token }: { userId: string; token: string }) {
             style={{ background: "var(--primary)" }}
           >
             <Sparkles size={16} strokeWidth={1.75} />
-            Check a job
+            Fit Check a job
           </button>
         </div>
       </Card>
@@ -1090,7 +1389,7 @@ function AddJobPanel({ userId, token }: { userId: string; token: string }) {
     <Card className="p-6 mb-10 space-y-4 animate-fade-in">
       <div className="flex items-center justify-between">
         <h2 className="text-base font-bold" style={{ color: "var(--text)" }}>
-          {step === "input" ? "Check a job you found" : step === "review" ? "Is this correct?" : "The recruiter's verdict"}
+          {step === "input" ? "Fit Check a job you found" : step === "review" ? "Is this correct?" : "Your Fit Check"}
         </h2>
         <button type="button" onClick={() => { reset(); setOpen(false); }} className="text-sm hover:underline" style={{ color: "var(--text-muted)" }}>
           Close
@@ -1211,7 +1510,7 @@ function AddJobPanel({ userId, token }: { userId: string; token: string }) {
               style={{ background: "var(--primary)" }}
             >
               <Sparkles size={16} strokeWidth={1.75} />
-              {busy ? "Asking the AI recruiter…" : "Looks right — analyze it"}
+              {busy ? "Running your Fit Check…" : "Looks right — run Fit Check"}
             </button>
             <button type="button" onClick={reset} className="text-sm hover:underline self-center" style={{ color: "var(--text-muted)" }}>
               Start over
@@ -1227,7 +1526,7 @@ function AddJobPanel({ userId, token }: { userId: string; token: string }) {
           ) : (
             <p className="text-sm" style={{ color: "var(--text-muted)" }}>
               The job is saved, but the AI recruiter is busy right now — its card below has an
-              &quot;Ask the AI recruiter&quot; button to try again in a minute.
+              &quot;Run Fit Check&quot; button to try again in a minute.
             </p>
           )}
           <div className="flex flex-wrap items-center gap-3">
@@ -1641,7 +1940,20 @@ function DashboardContent() {
     .sort((a, b) => (b.digest_date || "").localeCompare(a.digest_date || ""));
   const pipelineJobs = visibleJobs.filter((j) => j.jobs.source !== "user_submitted");
 
-  const todayMatches = pipelineJobs.filter((j) => j.digest_date === today);
+  // "Apply" verdicts first, then worth-a-shot, then unanalyzed, with the
+  // recruiter's "skip"s last — real stored signals only (a Fit Check run
+  // seconds ago re-sorts on the next refetch, not mid-scroll).
+  const verdictRank = (m: UserJob) => {
+    const v = (m.recruiter_eval?.verdict || "").toLowerCase();
+    return v === "apply" ? 0 : v === "stretch" ? 1 : v === "skip" ? 3 : 2;
+  };
+  const todayMatches = pipelineJobs
+    .filter((j) => j.digest_date === today)
+    .sort((a, b) => verdictRank(a) - verdictRank(b) || (b.match_score || 0) - (a.match_score || 0));
+  // Save-for-later shortlist — any day's jobs, newest saves first.
+  const savedJobs = allJobs
+    .filter((m) => m.saved_at)
+    .sort((a, b) => (b.saved_at || "").localeCompare(a.saved_at || ""));
   const jobsFound = todayMatches.length;
   // Ready resumes stay useful across days — count (and filter) all of them,
   // not just today's.
@@ -1773,9 +2085,13 @@ function DashboardContent() {
           <DigestTimePicker userId={user.id} token={token} currentTime={user.preferred_digest_time} />
         </div>
 
-        {/* AI Application Review — bring a job from anywhere, get the
-            recruiter's verdict before spending a resume generation on it. */}
+        {/* Fit Check intake — bring a job from anywhere, get the recruiter's
+            verdict before spending a resume generation on it. */}
         <AddJobPanel userId={user.id} token={token} />
+
+        {/* What the Fit Checks keep flagging — aggregated from stored evals,
+            zero AI cost. Renders only once there's enough data to be honest. */}
+        <SkillGapInsights jobs={allJobs} token={token} />
 
         {/* One-time location filter — narrows the view only, never the
             saved preferences. Options come from the loaded jobs, so it
@@ -1836,6 +2152,36 @@ function DashboardContent() {
           </>
         ) : (
           <>
+            {/* Saved for later — the user's shortlist, any day's jobs. */}
+            {savedJobs.length > 0 && (
+              <div className="mb-10">
+                <h2 className="text-lg font-semibold mb-1" style={{ color: "var(--text)" }}>Saved for later</h2>
+                <p className="text-sm mb-4" style={{ color: "var(--text-muted)" }}>
+                  Jobs you shortlisted — with your notes, so future-you remembers why.
+                </p>
+                <Card className="p-0 overflow-hidden">
+                  {savedJobs.map((m, i) => (
+                    <div
+                      key={m.id}
+                      className="flex flex-wrap items-center justify-between gap-3 px-5 py-4"
+                      style={i > 0 ? { borderTop: "1px solid var(--border)" } : undefined}
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold truncate" style={{ color: "var(--text)" }}>{m.jobs.title}</p>
+                        <p className="text-xs truncate" style={{ color: "var(--text-muted)" }}>{m.jobs.company}</p>
+                        {m.user_notes && (
+                          <p className="text-xs mt-1 truncate italic" style={{ color: "var(--text-muted)" }}>
+                            “{m.user_notes}”
+                          </p>
+                        )}
+                      </div>
+                      <SaveButton userId={user.id} token={token} match={m} compact />
+                    </div>
+                  ))}
+                </Card>
+              </div>
+            )}
+
             {/* Jobs the user brought themselves — their own section, never
                 presented as something we found for them. */}
             {userAddedJobs.length > 0 && (
@@ -1912,6 +2258,28 @@ function DashboardContent() {
                           {m.jobs.company}
                           {m.applied_at && ` · marked applied ${new Date(m.applied_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`}
                         </p>
+                        {/* The application's story — every chip is a real stored
+                            step (Fit Check verdict, generated documents). */}
+                        <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                          {(() => {
+                            const vs = VERDICT_STYLES[(m.recruiter_eval?.verdict || "").toLowerCase()];
+                            return vs ? (
+                              <span className="px-2 py-0.5 rounded-full text-xs font-medium" style={{ background: vs.bg, color: vs.color, border: `1px solid ${vs.border}` }}>
+                                Fit Check: {(m.recruiter_eval!.verdict || "").toLowerCase() === "apply" ? "Apply" : (m.recruiter_eval!.verdict || "").toLowerCase() === "stretch" ? "Worth a shot" : "Not recommended"}
+                              </span>
+                            ) : null;
+                          })()}
+                          {m.has_optimized_resume && (
+                            <span className="px-2 py-0.5 rounded-full text-xs" style={{ background: "var(--surface-muted)", color: "var(--text-muted)", border: "1px solid var(--border)" }}>
+                              Resume ✓
+                            </span>
+                          )}
+                          {m.has_cover_letter && (
+                            <span className="px-2 py-0.5 rounded-full text-xs" style={{ background: "var(--surface-muted)", color: "var(--text-muted)", border: "1px solid var(--border)" }}>
+                              Letter ✓
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <ApplicationStatusSelect userId={user.id} token={token} match={m} />
                     </div>

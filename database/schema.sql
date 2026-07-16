@@ -342,6 +342,12 @@ ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS feedback_reason   TEXT;
 ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS feedback_at       TIMESTAMPTZ;
 ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS pdf_error_message TEXT;
 
+-- Fit Check round: "Save for later" shortlist + the user's own notes on a
+-- job ("recruiter contacted me", "need visa clarity") — user memory the AI
+-- can't have. Both nullable; the backend degrades gracefully un-migrated.
+ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS saved_at          TIMESTAMPTZ;
+ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS user_notes        TEXT;
+
 -- Which job_category a job was fetched for — core/matcher.py uses this to
 -- stop cross-category matches (e.g. a UI/UX Designer job being shown to a
 -- Fullstack Developer with a plausible-looking score). Existing rows stay

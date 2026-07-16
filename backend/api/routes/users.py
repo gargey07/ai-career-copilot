@@ -140,7 +140,8 @@ async def get_dashboard(user_id: str, t: str = Query("", description="Signed das
         "jobs(id, title, company, location, is_remote, source, source_url, salary_min, salary_max, currency)"
     )
     jobs_resp = None
-    for extra in (", feedback, feedback_reason, job_feedback, job_feedback_reason, application_status, match_breakdown, recruiter_eval",
+    for extra in (", feedback, feedback_reason, job_feedback, job_feedback_reason, application_status, match_breakdown, recruiter_eval, saved_at, user_notes",
+                  ", feedback, feedback_reason, job_feedback, job_feedback_reason, application_status, match_breakdown, recruiter_eval",
                   ", feedback, feedback_reason, job_feedback, job_feedback_reason, application_status, match_breakdown",
                   ", feedback, feedback_reason, job_feedback, job_feedback_reason",
                   ", feedback, feedback_reason",
@@ -901,3 +902,83 @@ async def analyze_match(user_id: str, match_id: str, payload: AnalyzeRequest, t:
     if eval_result is None:
         raise HTTPException(503, "The AI recruiter is busy right now — try again in a minute.")
     return {"status": "ok", "recruiter_eval": eval_result, "cached": False}
+
+
+# ── Fit Check round: save-for-later, decision notes, cover-letter edits ───────
+
+def _require_owned_match(supabase, user_id: str, match_id: str) -> None:
+    owns = supabase.table("user_jobs").select("id").eq("id", match_id).eq("user_id", user_id).execute()
+    if not owns.data:
+        raise HTTPException(404, "Match not found.")
+
+
+class SaveRequest(BaseModel):
+    saved: bool = True
+
+
+@router.post("/{user_id}/matches/{match_id}/save")
+async def save_match(user_id: str, match_id: str, payload: SaveRequest, t: str = Query("")):
+    """Shortlist toggle — users collect jobs first and apply later; this is
+    the 'later' bucket. Same user-asserted-only philosophy as Applied."""
+    _require_dashboard_token(user_id, t)
+    supabase = get_supabase()
+    _require_owned_match(supabase, user_id, match_id)
+
+    update = {"saved_at": datetime.now(timezone.utc).isoformat() if payload.saved else None}
+    try:
+        supabase.table("user_jobs").update(update).eq("id", match_id).execute()
+    except Exception as e:
+        logger.warning(f"   Save write failed for match {match_id} ({e}) — saved_at column may be unmigrated.")
+        raise HTTPException(500, "Couldn't save that — try again in a moment.")
+    return {"status": "ok", "saved": payload.saved}
+
+
+class NotesRequest(BaseModel):
+    text: str = ""
+
+
+_MAX_NOTES_CHARS = 2000
+
+
+@router.patch("/{user_id}/matches/{match_id}/notes")
+async def update_notes(user_id: str, match_id: str, payload: NotesRequest, t: str = Query("")):
+    """The user's own memory on a job ('recruiter contacted me', 'need visa
+    clarity') — context the AI can't know. Empty text clears the note."""
+    _require_dashboard_token(user_id, t)
+    text = (payload.text or "").strip()[:_MAX_NOTES_CHARS]
+    supabase = get_supabase()
+    _require_owned_match(supabase, user_id, match_id)
+
+    try:
+        supabase.table("user_jobs").update({"user_notes": text or None}).eq("id", match_id).execute()
+    except Exception as e:
+        logger.warning(f"   Notes write failed for match {match_id} ({e}) — user_notes column may be unmigrated.")
+        raise HTTPException(500, "Couldn't save that note — try again in a moment.")
+    return {"status": "ok", "notes": text or None}
+
+
+class CoverLetterEditRequest(BaseModel):
+    text: str
+
+
+_MAX_COVER_LETTER_CHARS = 10_000
+
+
+@router.patch("/{user_id}/matches/{match_id}/cover-letter")
+async def edit_cover_letter(user_id: str, match_id: str, payload: CoverLetterEditRequest, t: str = Query("")):
+    """Persist the user's edits to their cover letter — no one sends 100%
+    AI-written text, and losing tweaks on every modal close forced them to
+    re-edit each time. Regenerate still overwrites with a fresh draft."""
+    _require_dashboard_token(user_id, t)
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(400, "The letter can't be empty — use Regenerate for a fresh draft instead.")
+    supabase = get_supabase()
+    _require_owned_match(supabase, user_id, match_id)
+
+    try:
+        supabase.table("user_jobs").update({"cover_letter_text": text[:_MAX_COVER_LETTER_CHARS]}).eq("id", match_id).execute()
+    except Exception as e:
+        logger.warning(f"   Cover-letter edit failed for match {match_id} ({e}).")
+        raise HTTPException(500, "Couldn't save your edits — try again in a moment.")
+    return {"status": "ok"}

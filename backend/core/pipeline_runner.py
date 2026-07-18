@@ -63,7 +63,7 @@ async def _embed_unembedded_jobs(batch_size: int = 50) -> int:
     return count
 
 
-async def _classify_unknown_experience_jobs(batch_size: int = 30) -> int:
+async def _classify_unknown_experience_jobs(batch_size: int = 50) -> int:
     """
     AI fallback for jobs the free, instant pass (jobs/fetchers.py's
     experience_months_from_text + infer_seniority_level) came up
@@ -83,11 +83,18 @@ async def _classify_unknown_experience_jobs(batch_size: int = 30) -> int:
         logger.info(f"   Skipping AI experience classification (unavailable: {e})")
         return 0
 
+    # Newest jobs FIRST. Without this ordering the batch always selected
+    # the same oldest rows — and jobs whose page can't be read (JSearch's
+    # synthetic URLs, JS-only ATS pages) stay NULL forever, so ~30 of them
+    # permanently clogged the batch and freshly-fetched Adzuna jobs never
+    # got resolved at all (live symptom: "still seeing 3-5yr jobs" — their
+    # truncated API descriptions were never backfilled from the full page).
     resp = (
         supabase.table("jobs")
         .select("id, title, description, source_url")
         .is_("required_experience_months", "null")
         .is_("seniority_level", "null")
+        .order("collected_at", desc=True)
         .limit(batch_size)
         .execute()
     )
@@ -111,6 +118,22 @@ async def _classify_unknown_experience_jobs(batch_size: int = 30) -> int:
             logger.warning(f"   Couldn't write AI classification for job {job['id']} ({e}) — continuing.")
     if jobs:
         logger.info(f"   🧠 AI experience classification: {count}/{len(jobs)} jobs got a value")
+    # Visibility (the TICKET-031 metric that was never built): how much of
+    # the job store is STILL unknown after this run — the number that tells
+    # us whether extraction is genuinely working or silently falling behind.
+    try:
+        remaining = (
+            supabase.table("jobs")
+            .select("id", count="exact")
+            .is_("required_experience_months", "null")
+            .is_("seniority_level", "null")
+            .limit(1)
+            .execute()
+        )
+        if getattr(remaining, "count", None) is not None:
+            logger.info(f"   📊 Jobs with no experience signal remaining: {remaining.count}")
+    except Exception:
+        pass  # a count is diagnostics, never worth failing the pipeline
     return count
 
 

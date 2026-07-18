@@ -485,6 +485,68 @@ async def purge_miscategorized_matches(
         return 0
 
 
+async def purge_overqualified_matches(supabase, user_id: str, experience_level: str) -> int:
+    """
+    Sibling of purge_miscategorized_matches for the OTHER long-running
+    leak: stored matches whose job we NOW know asks for more experience
+    than the user's band. Adzuna's API truncates descriptions, so many
+    jobs match as "unknown experience" (which passes the gate by policy)
+    and only LATER get their real requirement filled in by the classify/
+    page-fetch step — but the match row created before that stayed on the
+    dashboard indefinitely. Re-runs the exact same _experience_ok gate
+    over all stored matches against today's job data; same protections as
+    the category purge (user-acted rows and user-submitted jobs survive).
+
+    Best-effort: any failure logs and returns 0 — cleanup must never
+    block matching.
+    """
+    level = (experience_level or "").strip().lower()
+    if _USER_BAND_TOP_MONTHS.get(level) is None:
+        # senior/lead (or unrecognized level): no upward exclusion exists,
+        # so there's nothing to heal.
+        return 0
+    try:
+        resp = (
+            supabase.table("user_jobs")
+            .select(
+                "id, status, applied_at, application_status, feedback, job_feedback, "
+                "jobs(title, description, seniority_level, required_experience_months, source)"
+            )
+            .eq("user_id", user_id)
+            .execute()
+        )
+        rows = resp.data or []
+    except Exception as e:
+        logger.info(f"   Skipping over-qualification purge ({e}) — matching proceeds unaffected.")
+        return 0
+
+    stale_ids = []
+    for row in rows:
+        if (row.get("status") or "") in _PURGE_PROTECTED_STATUSES:
+            continue
+        if row.get("applied_at") or row.get("application_status"):
+            continue
+        if row.get("feedback") or row.get("job_feedback"):
+            continue
+        job = row.get("jobs") or {}
+        if job.get("source") == "user_submitted":
+            continue  # the user chose it — never auto-remove
+        if not job.get("title"):
+            continue
+        if not _experience_ok(job, level):
+            stale_ids.append(row["id"])
+
+    if not stale_ids:
+        return 0
+    try:
+        supabase.table("user_jobs").delete().in_("id", stale_ids).execute()
+        logger.info(f"   🧹 Removed {len(stale_ids)} over-qualified historical match(es) for user {user_id}")
+        return len(stale_ids)
+    except Exception as e:
+        logger.warning(f"   Over-qualification purge delete failed ({e}) — continuing anyway.")
+        return 0
+
+
 async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
     """
     Find the top N jobs matching a user's profile using vector similarity,
@@ -513,10 +575,12 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
         limit = user.get("job_count_override") or settings.max_jobs_per_user
     logger.info(f"🎯 Matching jobs for user: {user.get('name', user_id)}")
 
-    # Self-heal past category leaks BEFORE computing the fresh ranking, so
-    # this run's freshness/dedup logic doesn't count soon-to-be-deleted
-    # rows as "seen" history worth avoiding.
+    # Self-heal past leaks BEFORE computing the fresh ranking, so this
+    # run's freshness/dedup logic doesn't count soon-to-be-deleted rows as
+    # "seen" history worth avoiding: category leaks, and matches whose job
+    # we NOW know asks for more experience than this user has.
     await purge_miscategorized_matches(supabase, user_id, _user_categories(user), _category_terms(user))
+    await purge_overqualified_matches(supabase, user_id, user.get("experience_level") or "")
 
     seen = await _get_seen_job_ids(supabase, user_id)
     penalties = await _load_relevance_penalties(supabase, user_id)

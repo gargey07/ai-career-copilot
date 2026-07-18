@@ -30,7 +30,7 @@ from __future__ import annotations
 import asyncio
 
 import core.matcher as matcher
-from core.matcher import _category_relevant, _tokenize, purge_miscategorized_matches
+from core.matcher import _category_relevant, _tokenize, purge_miscategorized_matches, purge_overqualified_matches
 from core.skill_maps import JOB_CATEGORIES, GENERIC_ROLE_WORDS
 from jobs.fetchers import _title_matches
 
@@ -244,6 +244,45 @@ def test_purge_removes_leaked_rows_but_keeps_protected_and_relevant_ones():
     # (user signals), the in-category row passes the gate, and a row whose
     # job can't be loaded is never judged.
     assert db.deleted_ids == ["leak-plain"]
+
+
+def _base_row(row_id: str, job: dict, **overrides) -> dict:
+    return {
+        "id": row_id, "status": "emailed", "applied_at": None, "application_status": None,
+        "feedback": None, "job_feedback": None, "jobs": job, **overrides,
+    }
+
+
+def test_overqualified_purge_removes_now_known_too_senior_matches():
+    # The Adzuna truncation story: matched while experience was unknown,
+    # the classify/page-fetch step later filled in the real requirement.
+    rows = [
+        _base_row("leak-months", {"title": "UI/UX Designer", "description": "", "required_experience_months": 36, "seniority_level": None, "source": "adzuna"}),
+        _base_row("leak-senior-title", {"title": "Senior Designer", "description": "", "required_experience_months": None, "seniority_level": "senior", "source": "adzuna"}),
+        _base_row("keep-in-band", {"title": "UI/UX Designer", "description": "", "required_experience_months": 12, "seniority_level": None, "source": "adzuna"}),
+        _base_row("keep-unknown", {"title": "UI/UX Designer", "description": "", "required_experience_months": None, "seniority_level": None, "source": "adzuna"}),
+        _base_row("keep-applied", {"title": "Lead Designer", "description": "", "required_experience_months": 72, "seniority_level": "lead", "source": "adzuna"}, applied_at="2026-07-10"),
+        _base_row("keep-user-added", {"title": "Senior Designer", "description": "", "required_experience_months": 60, "seniority_level": "senior", "source": "user_submitted"}),
+    ]
+    db = _PurgeFakeSupabase(rows)
+    removed = asyncio.run(purge_overqualified_matches(db, "u1", "fresher"))
+    assert removed == 2
+    assert set(db.deleted_ids) == {"leak-months", "leak-senior-title"}
+
+
+def test_overqualified_purge_noop_for_senior_users():
+    # No upward exclusion exists for senior/lead — nothing to heal, and no
+    # query is even needed.
+    db = _PurgeFakeSupabase([
+        _base_row("m1", {"title": "Junior Designer", "description": "", "required_experience_months": 0, "seniority_level": "entry", "source": "adzuna"}),
+    ])
+    assert asyncio.run(purge_overqualified_matches(db, "u1", "senior")) == 0
+    assert db.deleted_ids is None
+
+
+def test_overqualified_purge_never_blocks_matching_on_failure():
+    db = _PurgeFakeSupabase([], select_error=RuntimeError("nested select unsupported"))
+    assert asyncio.run(purge_overqualified_matches(db, "u1", "fresher")) == 0
 
 
 def test_purge_never_deletes_user_submitted_jobs():

@@ -29,6 +29,10 @@ class _FakeQuery:
     def limit(self, n):
         return self
 
+    def order(self, *a, **k):
+        # Newest-first ordering (the batch-clog fix) — chain no-op here.
+        return self
+
     def eq(self, *a, **k):
         return self
 

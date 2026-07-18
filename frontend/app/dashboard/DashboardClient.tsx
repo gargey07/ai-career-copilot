@@ -39,6 +39,26 @@ interface Job {
   salary_min?: number | null;
   salary_max?: number | null;
   currency?: string | null;
+  // What the posting asks for — extracted at fetch/classify time. Shown so
+  // nobody discovers "1–4 years required" only AFTER clicking Apply.
+  required_experience_months?: number | null;
+  seniority_level?: string | null;
+}
+
+// Experience the job asks for, from real extracted data only — null when we
+// genuinely don't know (and then we show nothing rather than guessing).
+function formatExperience(job: Job): string | null {
+  if (job.required_experience_months != null && job.required_experience_months > 0) {
+    const years = job.required_experience_months / 12;
+    const value = Number.isInteger(years) ? years : Math.round(years * 10) / 10;
+    return `Asks for ${value}+ yr${value === 1 ? "" : "s"} experience`;
+  }
+  const level = (job.seniority_level || "").toLowerCase();
+  if (level === "entry") return "Entry level";
+  if (level === "mid") return "Mid level";
+  if (level === "senior") return "Senior level";
+  if (level === "lead") return "Lead level";
+  return null;
 }
 
 // Components the matcher actually computed for this row — never decorative
@@ -1063,7 +1083,10 @@ function FitCheckModal({ userId, token, match, evaluation, onClose, onEvalChange
               {job.location && ` · ${job.location}`}
               {job.is_remote && " · Remote"}
             </p>
-            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{salary ?? "Salary not disclosed"}</p>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+              {salary ?? "Salary not disclosed"}
+              {formatExperience(job) && ` · ${formatExperience(job)}`}
+            </p>
           </div>
           <button type="button" onClick={onClose} className="text-sm hover:underline shrink-0" style={{ color: "var(--text-muted)" }}>
             Close
@@ -1233,6 +1256,7 @@ function JobCard({ match, index, userId, token }: { match: UserJob; index: numbe
           </p>
           <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
             {salary ?? "Salary not disclosed"}
+            {formatExperience(job) && ` · ${formatExperience(job)}`}
           </p>
         </div>
         {match.match_score != null ? (

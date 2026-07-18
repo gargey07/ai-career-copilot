@@ -135,28 +135,36 @@ async def get_dashboard(user_id: str, t: str = Query("", description="Signed das
     # fallback pattern as the `projects` select above. optimized_resume_text
     # is fetched only to derive has_optimized_resume below — the raw text
     # itself is never shipped to the dashboard (see the transform below).
-    jobs_fields = (
-        "id, match_score, pdf_url, digest_date, status, applied_at, optimized_resume_text, cover_letter_text, "
-        "jobs(id, title, company, location, is_remote, source, source_url, salary_min, salary_max, currency)"
+    _row_fields = "id, match_score, pdf_url, digest_date, status, applied_at, optimized_resume_text, cover_letter_text, "
+    _jobs_base = "id, title, company, location, is_remote, source, source_url, salary_min, salary_max, currency"
+    # required_experience_months/seniority_level are migration-added jobs
+    # columns — same degrade-gracefully rule as the user_jobs extras: a
+    # database that hasn't run that migration must still get a dashboard.
+    jobs_field_variants = (
+        f"{_row_fields}jobs({_jobs_base}, required_experience_months, seniority_level)",
+        f"{_row_fields}jobs({_jobs_base})",
     )
     jobs_resp = None
-    for extra in (", feedback, feedback_reason, job_feedback, job_feedback_reason, application_status, match_breakdown, recruiter_eval, saved_at, user_notes",
-                  ", feedback, feedback_reason, job_feedback, job_feedback_reason, application_status, match_breakdown, recruiter_eval",
-                  ", feedback, feedback_reason, job_feedback, job_feedback_reason, application_status, match_breakdown",
-                  ", feedback, feedback_reason, job_feedback, job_feedback_reason",
-                  ", feedback, feedback_reason",
-                  ""):
-        try:
-            jobs_resp = (
-                supabase.table("user_jobs")
-                .select(f"{jobs_fields}{extra}")
-                .eq("user_id", user_id)
-                .order("match_score", desc=True)
-                .execute()
-            )
+    for jobs_fields in jobs_field_variants:
+        for extra in (", feedback, feedback_reason, job_feedback, job_feedback_reason, application_status, match_breakdown, recruiter_eval, saved_at, user_notes",
+                      ", feedback, feedback_reason, job_feedback, job_feedback_reason, application_status, match_breakdown, recruiter_eval",
+                      ", feedback, feedback_reason, job_feedback, job_feedback_reason, application_status, match_breakdown",
+                      ", feedback, feedback_reason, job_feedback, job_feedback_reason",
+                      ", feedback, feedback_reason",
+                      ""):
+            try:
+                jobs_resp = (
+                    supabase.table("user_jobs")
+                    .select(f"{jobs_fields}{extra}")
+                    .eq("user_id", user_id)
+                    .order("match_score", desc=True)
+                    .execute()
+                )
+                break
+            except Exception:
+                continue
+        if jobs_resp is not None:
             break
-        except Exception:
-            continue
     if jobs_resp is None:
         raise HTTPException(500, "We couldn't load your matches — please try again.")
 

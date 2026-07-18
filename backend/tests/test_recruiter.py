@@ -291,6 +291,42 @@ def test_on_demand_generation_never_blocked_by_skip(monkeypatch):
     assert [rid for rid, _ in db.resume_updates()] == ["m1"]
 
 
+def test_force_regenerates_over_existing_resume_and_clears_pdf(monkeypatch):
+    # The improve-then-rebuild loop: profile updated after a Fit Check →
+    # force must replace the stale text (not early-return "already done"),
+    # skip the reuse cache (which holds exactly the stale text), and clear
+    # pdf_url so a fresh PDF renders over the old one.
+    db = _pipeline_db()
+    db.matches = [{
+        "id": "m1", "job_id": "j2", "rank": 1,
+        "optimized_resume_text": "OLD RESUME", "recruiter_eval": {"verdict": "apply"},
+    }]
+    _patch_optimizer(monkeypatch, db, verdicts={})
+
+    cache_calls = []
+    monkeypatch.setattr(optimizer, "_find_recent_resume", lambda *a, **k: cache_calls.append(1) or {"optimized_resume_text": "OLD RESUME"})
+
+    ok = asyncio.run(optimizer.run_optimizer_for_match("u1", "m1", force=True))
+
+    assert ok is True
+    assert cache_calls == []  # cache would return the stale text — skipped
+    updates = db.resume_updates()
+    assert updates == [("m1", updates[0][1])]
+    assert updates[0][1]["optimized_resume_text"] == "TAILORED RESUME"
+    assert updates[0][1]["pdf_url"] is None  # old PDF invalidated
+
+
+def test_without_force_existing_resume_untouched(monkeypatch):
+    db = _pipeline_db()
+    db.matches = [{"id": "m1", "job_id": "j2", "rank": 1, "optimized_resume_text": "OLD RESUME"}]
+    _patch_optimizer(monkeypatch, db, verdicts={})
+
+    ok = asyncio.run(optimizer.run_optimizer_for_match("u1", "m1"))
+
+    assert ok is True
+    assert db.resume_updates() == []  # nothing regenerated, no AI spend
+
+
 def test_on_demand_generation_reuses_stored_eval(monkeypatch):
     # The user already ran "Should I apply?" (or the add-a-job flow) on this
     # match — Generate must NOT pay for the same recruiter eval twice.

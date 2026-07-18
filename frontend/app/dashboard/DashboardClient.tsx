@@ -949,14 +949,83 @@ function NotesEditor({ userId, token, match }: { userId: string; token: string; 
   );
 }
 
+// ── Rebuild an existing tailored resume from the user's UPDATED profile ───────
+// The improve-then-rebuild loop: Fit Check flags gaps → user adds the skill/
+// project to their profile → this rebuilds the already-generated resume from
+// the new profile (a fresh AI call, counted against the daily allowance).
+function RegenerateResumeButton({ userId, token, matchId }: { userId: string; token: string; matchId: string }) {
+  const [state, setState] = useState<"idle" | "requesting" | "started" | "capped">("idle");
+  useDelayedDashboardRefresh(state === "started");
+
+  const regenerate = async () => {
+    setState("requesting");
+    try {
+      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${matchId}/generate-resume?t=${encodeURIComponent(token)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ regenerate: true }),
+      });
+      if (res.status === 429) setState("capped");
+      else setState(res.ok ? "started" : "idle");
+    } catch {
+      setState("idle");
+    }
+  };
+
+  if (state === "capped") {
+    return <span className="text-xs" style={{ color: "var(--text-muted)" }}>Daily resume allowance used — rebuild unlocks tomorrow</span>;
+  }
+  if (state === "started") {
+    return <span className="text-xs" style={{ color: "var(--text-muted)" }}>Rebuilding from your updated profile — this page refreshes itself in about a minute</span>;
+  }
+  return (
+    <button
+      type="button"
+      onClick={regenerate}
+      disabled={state === "requesting"}
+      className="text-xs font-medium hover:underline disabled:opacity-60"
+      style={{ color: "var(--primary)" }}
+      title="Uses one of today's resume generations"
+    >
+      {state === "requesting" ? "Starting…" : "Improved your profile? Rebuild this resume"}
+    </button>
+  );
+}
+
 // ── Fit Check modal — the Decision Center: one job, one screen, one decision ──
-function FitCheckModal({ userId, token, match, evaluation, onClose }: {
+function FitCheckModal({ userId, token, match, evaluation, onClose, onEvalChange }: {
   userId: string; token: string; match: UserJob; evaluation: RecruiterEval; onClose: () => void;
+  onEvalChange: (e: RecruiterEval) => void;
 }) {
   const job = match.jobs;
   const salary = formatSalary(job);
   const hasApply = job.source_url && !job.source_url.includes("example.com") && /^https?:\/\//i.test(job.source_url);
   const [skipped, setSkipped] = useState(match.job_feedback === "not_relevant");
+  const [rerunState, setRerunState] = useState<"idle" | "loading" | "capped" | "error">("idle");
+
+  // Fresh verdict against the user's CURRENT profile — the improve loop's
+  // other half: after adding the skills this Fit Check flagged, the old
+  // verdict is stale. Uses one analysis from the daily allowance.
+  const rerun = async () => {
+    setRerunState("loading");
+    try {
+      const res = await fetch(`${API_URL}/api/users/${userId}/matches/${match.id}/analyze?t=${encodeURIComponent(token)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ regenerate: true }),
+      });
+      if (res.status === 429) { setRerunState("capped"); return; }
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.recruiter_eval) {
+        onEvalChange(data.recruiter_eval);
+        setRerunState("idle");
+      } else {
+        setRerunState("error");
+      }
+    } catch {
+      setRerunState("error");
+    }
+  };
 
   const skip = async () => {
     try {
@@ -1002,6 +1071,28 @@ function FitCheckModal({ userId, token, match, evaluation, onClose }: {
         </div>
 
         <RecruiterInsight evaluation={evaluation} />
+
+        {/* The improve loop: profile updated since this analysis → refresh
+            the verdict and/or the already-built resume from the new profile. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          {rerunState === "capped" ? (
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>Daily Fit Check allowance used — re-run unlocks tomorrow</span>
+          ) : (
+            <button
+              type="button"
+              onClick={rerun}
+              disabled={rerunState === "loading"}
+              className="text-xs font-medium hover:underline disabled:opacity-60"
+              style={{ color: "var(--primary)" }}
+              title="Uses one of today's Fit Check analyses"
+            >
+              {rerunState === "loading" ? "Re-running Fit Check…" : rerunState === "error" ? "Couldn't re-run — try again" : "Improved your profile? Re-run Fit Check"}
+            </button>
+          )}
+          {match.has_optimized_resume && (
+            <RegenerateResumeButton userId={userId} token={token} matchId={match.id} />
+          )}
+        </div>
 
         <NotesEditor userId={userId} token={token} match={match} />
 
@@ -1186,7 +1277,14 @@ function JobCard({ match, index, userId, token }: { match: UserJob; index: numbe
         />
       )}
       {reviewOpen && evaluation && (
-        <FitCheckModal userId={userId} token={token} match={match} evaluation={evaluation} onClose={() => setReviewOpen(false)} />
+        <FitCheckModal
+          userId={userId}
+          token={token}
+          match={match}
+          evaluation={evaluation}
+          onClose={() => setReviewOpen(false)}
+          onEvalChange={setEvaluation}
+        />
       )}
 
       <div className="flex flex-wrap gap-3">

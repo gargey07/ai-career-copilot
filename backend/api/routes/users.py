@@ -416,11 +416,11 @@ class CoverLetterRequest(BaseModel):
     regenerate: bool = False
 
 
-async def _generate_resume_task(user_id: str, match_id: str) -> None:
+async def _generate_resume_task(user_id: str, match_id: str, force: bool = False) -> None:
     """Background: tailored resume text, then its PDF. Each half best-effort."""
     try:
         from core.optimizer import run_optimizer_for_match
-        ok = await run_optimizer_for_match(user_id, match_id)
+        ok = await run_optimizer_for_match(user_id, match_id, force=force)
         if not ok:
             logger.warning(f"   On-demand resume generation produced nothing for match {match_id}")
             return
@@ -434,15 +434,30 @@ async def _generate_resume_task(user_id: str, match_id: str) -> None:
         logger.warning(f"   On-demand PDF render failed for match {match_id} (resume text saved): {e}")
 
 
+class GenerateResumeRequest(BaseModel):
+    # The improve-then-rebuild loop: after updating their profile from a
+    # Fit Check's suggestions, the user rebuilds this job's existing resume
+    # from the new profile instead of being told "already generated".
+    regenerate: bool = False
+
+
 @router.post("/{user_id}/matches/{match_id}/generate-resume")
-async def generate_resume_on_demand(user_id: str, match_id: str, background_tasks: BackgroundTasks, t: str = Query("")):
+async def generate_resume_on_demand(
+    user_id: str,
+    match_id: str,
+    background_tasks: BackgroundTasks,
+    payload: GenerateResumeRequest | None = None,
+    t: str = Query(""),
+):
     """
     Per-job "Generate Tailored Resume" — the pipeline only auto-generates
     for the top few matches; this lets the user pick which OTHER match
     deserves one. Capped per day at the user's pipeline quota plus a small
     on-demand bonus, counted from rows that actually have resume text today.
+    A regenerate consumes the same daily allowance — it's a real AI call.
     """
     _require_dashboard_token(user_id, t)
+    regenerate = bool(payload and payload.regenerate)
     supabase = get_supabase()
 
     owns = (
@@ -455,7 +470,7 @@ async def generate_resume_on_demand(user_id: str, match_id: str, background_task
     if not owns.data:
         raise HTTPException(404, "Match not found.")
     row = owns.data[0]
-    if row.get("optimized_resume_text"):
+    if row.get("optimized_resume_text") and not regenerate:
         return {"status": "already_generated", "message": "This match already has a tailored resume."}
 
     # Daily cap: pipeline quota (or admin override) + on-demand bonus.
@@ -482,7 +497,7 @@ async def generate_resume_on_demand(user_id: str, match_id: str, background_task
             "You've used today's tailored-resume allowance — more unlock tomorrow morning.",
         )
 
-    background_tasks.add_task(_generate_resume_task, user_id, match_id)
+    background_tasks.add_task(_generate_resume_task, user_id, match_id, regenerate)
     return {"status": "started", "message": "Generating your tailored resume — this can take up to a minute."}
 
 

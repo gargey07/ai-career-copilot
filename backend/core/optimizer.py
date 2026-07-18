@@ -232,7 +232,7 @@ def _apply_cached_resume(supabase, match_id: str, cached: dict) -> None:
         supabase.table("user_jobs").update(payload).eq("id", match_id).execute()
 
 
-async def run_optimizer_for_match(user_id: str, match_id: str) -> bool:
+async def run_optimizer_for_match(user_id: str, match_id: str, force: bool = False) -> bool:
     """
     On-demand tailored resume for ONE match (the dashboard's per-job
     "Generate Tailored Resume" button) — the pipeline only auto-generates
@@ -240,6 +240,13 @@ async def run_optimizer_for_match(user_id: str, match_id: str) -> bool:
     resume for a lower-ranked job they actually want to apply to. Same
     cache and write path as the batch optimizer. Returns True when the
     match ends up with resume text (fresh or cached).
+
+    force=True is the improve-then-rebuild loop: the user ran a Fit Check,
+    improved their profile from its suggestions, and wants THIS job's
+    already-built resume redone from the updated profile. It bypasses both
+    the already-generated early return and the reuse cache (which would
+    hand back exactly the stale text being replaced) and clears pdf_url so
+    a fresh PDF renders over the old one.
     """
     supabase = get_supabase()
     today = date.today().isoformat()
@@ -264,10 +271,10 @@ async def run_optimizer_for_match(user_id: str, match_id: str) -> bool:
             continue
     if not match:
         return False
-    if match.get("optimized_resume_text"):
+    if match.get("optimized_resume_text") and not force:
         return True  # already generated — nothing to do
 
-    cached = _find_recent_resume(supabase, user_id, match["job_id"], today)
+    cached = None if force else _find_recent_resume(supabase, user_id, match["job_id"], today)
     if cached:
         try:
             _apply_cached_resume(supabase, match_id, cached)
@@ -305,10 +312,15 @@ async def run_optimizer_for_match(user_id: str, match_id: str) -> bool:
         user_skills=user.get("skills") or [],
         job_category=user.get("job_category") or "ui_ux_designer",
     )
-    supabase.table("user_jobs").update({
+    update = {
         "optimized_resume_text": optimized,
         "status": "resume_ready",
-    }).eq("id", match_id).execute()
+    }
+    if force:
+        # The old PDF was rendered from the old profile — clear it so the
+        # PDF step regenerates and the download link can't serve stale text.
+        update["pdf_url"] = None
+    supabase.table("user_jobs").update(update).eq("id", match_id).execute()
     return True
 
 

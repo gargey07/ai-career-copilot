@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState, Suspense, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useSearchParams } from "next/navigation";
 import {
   Sun,
@@ -530,6 +531,7 @@ function CoverLetterButton({ userId, token, match }: { userId: string; token: st
         {match.has_cover_letter ? "View Cover Letter" : "Cover Letter"}
       </button>
       {open && (
+        <ModalPortal>
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: "rgba(15,47,58,0.45)" }}
@@ -591,6 +593,7 @@ function CoverLetterButton({ userId, token, match }: { userId: string; token: st
             ) : null}
           </div>
         </div>
+        </ModalPortal>
       )}
     </>
   );
@@ -969,6 +972,18 @@ function NotesEditor({ userId, token, match }: { userId: string; token: string; 
   );
 }
 
+// ── Modal portal ──────────────────────────────────────────────────────────────
+// Modals must render on document.body, NOT inside their job card: the cards'
+// fade-in animation retains a CSS transform (animation-fill-mode: both), and a
+// transformed ancestor becomes the containing block for position:fixed — which
+// pinned the Fit Check overlay INSIDE its card, behind later cards, unscrollable
+// (live bug report with screenshot). A portal escapes any ancestor's transform/
+// overflow/stacking context for good.
+function ModalPortal({ children }: { children: ReactNode }) {
+  if (typeof document === "undefined") return null; // SSR safety
+  return createPortal(children, document.body);
+}
+
 // ── Rebuild an existing tailored resume from the user's UPDATED profile ───────
 // The improve-then-rebuild loop: Fit Check flags gaps → user adds the skill/
 // project to their profile → this rebuilds the already-generated resume from
@@ -1061,6 +1076,7 @@ function FitCheckModal({ userId, token, match, evaluation, onClose, onEvalChange
   };
 
   return (
+    <ModalPortal>
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: "rgba(15,47,58,0.45)" }}
@@ -1158,6 +1174,7 @@ function FitCheckModal({ userId, token, match, evaluation, onClose, onEvalChange
         )}
       </div>
     </div>
+    </ModalPortal>
   );
 }
 

@@ -352,8 +352,8 @@ async def update_overrides(user_id: str, payload: OverridesUpdate, token: str = 
             raise HTTPException(400, "override_expires_at must be an ISO date/datetime, e.g. 2026-07-20")
 
     update = {
-        "resume_quota_override": clamp(payload.resume_quota_override, 20),
-        "job_count_override": clamp(payload.job_count_override, 50),
+        "resume_quota_override": clamp(payload.resume_quota_override, settings.resume_override_max),
+        "job_count_override": clamp(payload.job_count_override, settings.job_override_max),
         "override_expires_at": expires_at,
     }
     supabase = get_supabase()
@@ -377,7 +377,17 @@ async def update_overrides(user_id: str, payload: OverridesUpdate, token: str = 
             raise HTTPException(500, "Couldn't save overrides — the override columns may not be migrated yet.")
 
     _audit("overrides_changed", user_id, {"old": old, "new": update})
-    return {"status": "ok", **update}
+    # Echo the ceilings so the UI can SAY when a value was capped instead
+    # of silently storing less than what the admin typed (live complaint:
+    # "I can not increase the limit and it does not tell me how much").
+    return {
+        "status": "ok",
+        **update,
+        "caps": {
+            "resume_quota": settings.resume_override_max,
+            "job_count": settings.job_override_max,
+        },
+    }
 
 
 # ── PDF failures — the diagnostic every "every resume shows Retry" report needs ──

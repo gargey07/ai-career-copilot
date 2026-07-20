@@ -152,6 +152,12 @@ class Settings(BaseSettings):
     # screenshot), so 10 clicks ≈ 20-30 AI calls/user/day, still budget-
     # guarded per provider on top of this.
     job_analyses_per_user_daily: int = 10
+    # Ceilings for the per-user admin overrides (T-023). Env-tunable so
+    # raising a beta tester's allowance further is a Coolify config change,
+    # not a code change. The global per-provider AI budgets still cap total
+    # spend regardless of any per-user value.
+    resume_override_max: int = 100
+    job_override_max: int = 200
     # Resume style preview (POST /api/resumes/preview) — no AI/Chromium
     # involved, cheap, but unauthenticated (fires pre-account during
     # onboarding), so still worth a sane per-IP daily ceiling.

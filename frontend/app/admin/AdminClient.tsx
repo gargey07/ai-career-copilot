@@ -167,6 +167,9 @@ function OverridesEditor({ token, user, onSaved }: { token: string; user: AdminU
   const [expires, setExpires] = useState((user.override_expires_at ?? "").slice(0, 10));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  // "You typed 100, the server stored 50" must never be silent — the
+  // backend clamps to its configured ceilings and echoes them back.
+  const [notice, setNotice] = useState<string | null>(null);
 
   const dirty =
     resumeQuota !== (user.resume_quota_override?.toString() ?? "") ||
@@ -176,17 +179,35 @@ function OverridesEditor({ token, user, onSaved }: { token: string; user: AdminU
   const save = async () => {
     if (!dirty || saving) return;
     setSaving(true);
+    const requestedResume = resumeQuota.trim() === "" ? null : Number(resumeQuota);
+    const requestedJobs = jobCount.trim() === "" ? null : Number(jobCount);
     try {
       const res = await fetch(`${API_URL}/api/admin/users/${user.id}/overrides?token=${encodeURIComponent(token)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          resume_quota_override: resumeQuota.trim() === "" ? null : Number(resumeQuota),
-          job_count_override: jobCount.trim() === "" ? null : Number(jobCount),
+          resume_quota_override: requestedResume,
+          job_count_override: requestedJobs,
           override_expires_at: expires.trim() === "" ? null : expires,
         }),
       });
       if (res.ok) {
+        const data = await res.json().catch(() => ({} as any));
+        const storedResume = data.resume_quota_override ?? null;
+        const storedJobs = data.job_count_override ?? null;
+        const caps = data.caps || {};
+        const clamped: string[] = [];
+        if (requestedResume != null && storedResume != null && storedResume < requestedResume) {
+          clamped.push(`resumes max is ${caps.resume_quota ?? storedResume}/day — saved ${storedResume}`);
+        }
+        if (requestedJobs != null && storedJobs != null && storedJobs < requestedJobs) {
+          clamped.push(`jobs max is ${caps.job_count ?? storedJobs}/day — saved ${storedJobs}`);
+        }
+        // Reflect what the server actually stored, so the inputs never
+        // show a number that isn't real.
+        setResumeQuota(storedResume?.toString() ?? "");
+        setJobCount(storedJobs?.toString() ?? "");
+        setNotice(clamped.length ? clamped.join("; ") : null);
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
         onSaved();
@@ -231,6 +252,11 @@ function OverridesEditor({ token, user, onSaved }: { token: string; user: AdminU
         title="Overrides auto-clear after this date. Blank = no expiry."
       />
       {saved && <span className="text-xs" style={{ color: "var(--success)" }}>✓</span>}
+      {notice && (
+        <span className="text-xs" style={{ color: "#B45309" }} title="The server enforces a ceiling on overrides — raise it via the RESUME_OVERRIDE_MAX / JOB_OVERRIDE_MAX env vars in Coolify.">
+          {notice}
+        </span>
+      )}
     </div>
   );
 }

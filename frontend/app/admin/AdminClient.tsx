@@ -263,6 +263,120 @@ function OverridesEditor({ token, user, onSaved }: { token: string; user: AdminU
 
 // T-023: search the shared jobs pool by title — the QA tool for
 // "does category X actually return good jobs?"
+// "Why did fetching find nothing for this category?" — live Adzuna probe
+// per pipeline query, showing raw results vs title-filter survivors, so
+// zero-jobs mysteries (first HR user, obscure city) get answered by a
+// click instead of a support conversation.
+interface TestFetchRow {
+  query: string;
+  adzuna_raw: number | null;
+  passed_title_filter: number | null;
+  sample_raw_titles: string[];
+  sample_passing_titles: string[];
+  error: string | null;
+}
+interface TestFetchResult {
+  category: string;
+  queries_used: string[];
+  resolved_location: { raw?: string; country_code?: string | null; city?: string | null } | null;
+  adzuna_country: string;
+  adzuna_where: string | null;
+  results: TestFetchRow[];
+  jobs_stored_for_category: number | null;
+}
+
+function TestFetchPanel({ token }: { token: string }) {
+  const [category, setCategory] = useState("");
+  const [location, setLocation] = useState("");
+  const [result, setResult] = useState<TestFetchResult | null>(null);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState("");
+
+  const run = async () => {
+    if (!category.trim() || running) return;
+    setRunning(true);
+    setError("");
+    setResult(null);
+    try {
+      const res = await fetch(
+        `${API_URL}/api/admin/test-fetch?token=${encodeURIComponent(token)}&category=${encodeURIComponent(category.trim())}&location=${encodeURIComponent(location.trim())}`
+      );
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) setResult(data);
+      else setError(data.detail || "Test failed — try again.");
+    } catch {
+      setError("Couldn't reach the server.");
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2 mb-3">
+        <input
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && run()}
+          placeholder="Category, e.g. hr_recruiter"
+          className="flex-1 min-w-[180px] px-3 py-2 rounded-md text-sm outline-none focus:border-[var(--primary)]"
+          style={{ border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)" }}
+        />
+        <input
+          value={location}
+          onChange={(e) => setLocation(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && run()}
+          placeholder="City (optional)"
+          className="w-40 px-3 py-2 rounded-md text-sm outline-none focus:border-[var(--primary)]"
+          style={{ border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)" }}
+        />
+        <Button variant="secondary" onClick={run} disabled={running || !category.trim()}>
+          {running ? "Testing…" : "Test fetch"}
+        </Button>
+      </div>
+      {error && <p className="text-sm mb-2" style={{ color: "var(--coral)" }}>{error}</p>}
+      {result && (
+        <div className="space-y-3">
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Searching Adzuna {result.adzuna_country.toUpperCase()}
+            {result.adzuna_where ? ` · ${result.adzuna_where}` : " · country-wide"}
+            {result.jobs_stored_for_category != null && ` — ${result.jobs_stored_for_category} job(s) already stored for "${result.category}"`}
+          </p>
+          {result.results.map((r) => (
+            <div key={r.query} className="p-3 rounded-md" style={{ background: "var(--surface-muted)" }}>
+              <p className="text-sm font-semibold" style={{ color: "var(--text)" }}>“{r.query}”</p>
+              {r.error ? (
+                <p className="text-xs mt-1" style={{ color: "#B91C1C" }}>{r.error}</p>
+              ) : (
+                <>
+                  <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+                    Adzuna returned <strong>{r.adzuna_raw}</strong> · survived our title filter: <strong>{r.passed_title_filter}</strong>
+                  </p>
+                  {(r.sample_passing_titles.length > 0 ? r.sample_passing_titles : r.sample_raw_titles).length > 0 && (
+                    <p className="text-xs mt-1 truncate" style={{ color: "var(--text-muted)" }}>
+                      e.g. {(r.sample_passing_titles.length > 0 ? r.sample_passing_titles : r.sample_raw_titles).slice(0, 3).join(" · ")}
+                    </p>
+                  )}
+                  {r.adzuna_raw === 0 && (
+                    <p className="text-xs mt-1" style={{ color: "#B45309" }}>
+                      Adzuna itself has nothing for this search{result.adzuna_where ? ` in ${result.adzuna_where} — try without a city` : ""}.
+                    </p>
+                  )}
+                  {(r.adzuna_raw ?? 0) > 0 && r.passed_title_filter === 0 && (
+                    <p className="text-xs mt-1" style={{ color: "#B45309" }}>
+                      Adzuna HAS results but our title filter rejected all of them — report this combination.
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function JobsPoolSearch({ token }: { token: string }) {
   const [q, setQ] = useState("");
   const [jobs, setJobs] = useState<PoolJob[] | null>(null);
@@ -941,6 +1055,15 @@ export default function AdminClient() {
             {/* Jobs pool search (T-023) — QA the fetchers per category */}
             <SectionCard icon={Briefcase} title="Jobs pool">
               <JobsPoolSearch token={token} />
+            </SectionCard>
+
+            <SectionCard icon={Briefcase} title="Test job fetch">
+              <p className="text-sm mb-3" style={{ color: "var(--text-muted)" }}>
+                Live-check what Adzuna returns for a category&apos;s pipeline queries and
+                whether our title filter keeps them — the &quot;why does this user have no
+                jobs?&quot; answer machine. Costs one Adzuna call per query.
+              </p>
+              <TestFetchPanel token={token} />
             </SectionCard>
 
             <SectionCard icon={Mail} title="Recent emails">

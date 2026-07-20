@@ -264,6 +264,111 @@ async def test_ai_providers(token: str = Query(..., description="Admin token")):
     return {"results": await probe_all_providers()}
 
 
+async def _adzuna_probe(query: str, country: str, where: str | None) -> list[str]:
+    """One live Adzuna page for a query — returns the RAW titles (before any
+    filtering). Isolated so tests can stub it. Raises on HTTP failure."""
+    import httpx
+
+    params = {
+        "app_id": settings.adzuna_app_id,
+        "app_key": settings.adzuna_app_key,
+        "what": query,
+        "results_per_page": 50,
+        "content-type": "application/json",
+    }
+    if where:
+        params["where"] = where
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(f"https://api.adzuna.com/v1/api/jobs/{country}/search/1", params=params)
+        resp.raise_for_status()
+        return [j.get("title", "") for j in resp.json().get("results", [])]
+
+
+@router.get("/test-fetch")
+async def test_fetch(
+    token: str = Query(..., description="Admin token"),
+    category: str = Query(..., description="Job category key or free text, e.g. hr_recruiter"),
+    location: str = Query("", description="Optional city/country, resolved like a user preference"),
+):
+    """
+    The "why did fetching find nothing for this category?" diagnostic —
+    runs the EXACT same queries the pipeline would, against Adzuna live,
+    and reports each stage separately: what Adzuna returned raw, what
+    survived the title filter, and how many jobs the store already has
+    for this category. Distinguishes "Adzuna has nothing for this
+    search/city" from "our filter rejected everything" from "fetch works,
+    the problem is downstream in matching" without needing server logs.
+    Costs one budget-counted Adzuna call per query per click.
+    """
+    _require_admin(token)
+    _audit("test_fetch", detail={"category": category, "location": location or None})
+
+    from core.locations import ADZUNA_COUNTRIES
+    from core.pipeline_runner import _queries_for_category
+    from core.usage_guard import check_budget
+    from jobs.fetchers import _title_matches, resolve_fetch_location
+
+    queries_all = _queries_for_category(category)
+    queries_used = queries_all[: settings.fetch_queries_per_category]
+    loc = resolve_fetch_location(location) if location.strip() else None
+    country = (loc or {}).get("country_code") or "in"
+    where = (loc or {}).get("city")
+
+    results = []
+    for query in queries_used:
+        row: dict = {
+            "query": query,
+            "adzuna_raw": None,
+            "passed_title_filter": None,
+            "sample_raw_titles": [],
+            "sample_passing_titles": [],
+            "error": None,
+        }
+        if not settings.adzuna_app_id or not settings.adzuna_app_key:
+            row["error"] = "Adzuna API keys are not configured on this server."
+        elif country not in ADZUNA_COUNTRIES:
+            row["error"] = f"Adzuna has no endpoint for country '{country}' — the pipeline skips Adzuna for this location."
+        elif not check_budget("adzuna", settings.adzuna_daily_limit):
+            row["error"] = "Adzuna daily budget exhausted — counters reset at midnight."
+        else:
+            try:
+                raw_titles = await _adzuna_probe(query, country, where)
+                passing = [t for t in raw_titles if _title_matches(t, query)]
+                row["adzuna_raw"] = len(raw_titles)
+                row["passed_title_filter"] = len(passing)
+                row["sample_raw_titles"] = raw_titles[:5]
+                row["sample_passing_titles"] = passing[:5]
+            except Exception as e:
+                row["error"] = f"{type(e).__name__}: {e}"[:300]
+        results.append(row)
+
+    stored_count = None
+    try:
+        stored = (
+            get_supabase()
+            .table("jobs")
+            .select("id", count="exact")
+            .eq("search_category", category)
+            .limit(1)
+            .execute()
+        )
+        stored_count = getattr(stored, "count", None)
+    except Exception:
+        pass
+
+    return {
+        "category": category,
+        "queries_used": queries_used,
+        "queries_skipped": queries_all[settings.fetch_queries_per_category :],
+        "location_input": location or None,
+        "resolved_location": loc,
+        "adzuna_country": country,
+        "adzuna_where": where,
+        "results": results,
+        "jobs_stored_for_category": stored_count,
+    }
+
+
 @router.post("/classify-experience-ai")
 async def classify_experience_ai_now(background_tasks: BackgroundTasks, token: str = Query(..., description="Admin token")):
     """AI fallback classification for jobs the free regex/title backfills

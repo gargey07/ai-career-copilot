@@ -478,6 +478,45 @@ def all_categories() -> list[dict]:
     return [{"value": key, "label": cat["label"]} for key, cat in JOB_CATEGORIES.items()]
 
 
+def infer_category_from_roles(target_roles: list[str] | None) -> str | None:
+    """
+    Best-guess job_category key from a user's target_roles, or None when
+    nothing scores. Exists because a user can reach the pipeline with an
+    EMPTY job_category (resume-upload path, or an onboarding flow that
+    didn't capture it) while still having real roles like "HR Executive",
+    "Recruiter" — and an empty category silently defaults every downstream
+    step to ui_ux_designer, so an HR seeker gets designer jobs or nothing
+    (2026-07 production incident: Vini Jain, category "(none set)", zero
+    matches). Scores each category by how many of its role-vocabulary
+    tokens the user's roles share, ignoring GENERIC_ROLE_WORDS so a lone
+    ambiguous word ("manager", "executive") can't decide it alone.
+    """
+    role_words = set()
+    for r in (target_roles or []):
+        role_words |= _tokenize_role_words(r or "")
+    role_words -= GENERIC_ROLE_WORDS
+    if not role_words:
+        return None
+
+    best_key, best_score = None, 0
+    for key, cat in JOB_CATEGORIES.items():
+        vocab = _category_vocab(cat) - GENERIC_ROLE_WORDS
+        score = len(role_words & vocab)
+        if score > best_score:
+            best_key, best_score = key, score
+    return best_key
+
+
+def resolve_user_category(user: dict) -> str | None:
+    """A user's effective job_category: the stored one, else inferred from
+    target_roles. None when neither yields anything (matching then stays
+    unfiltered rather than defaulting to a wrong profession)."""
+    stored = (user.get("job_category") or "").strip()
+    if stored:
+        return stored
+    return infer_category_from_roles(user.get("target_roles") or [])
+
+
 def _flatten(field: str) -> list[str]:
     """Deduped, order-preserving flat list of a field across every job category."""
     seen: set[str] = set()

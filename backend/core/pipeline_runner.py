@@ -224,10 +224,14 @@ def _fetch_targets(users: list[dict]) -> list[tuple[str, dict | None]]:
     category+country+city so ten London users cost one fetch, not ten.
     """
     from jobs.fetchers import resolve_fetch_location
+    from core.skill_maps import resolve_user_category
 
     targets: dict[tuple[str, str], tuple[str, dict | None]] = {}
     for u in users:
-        categories = [(u.get("job_category") or "").strip() or "ui_ux_designer"]
+        # Empty category → infer from roles (not the ui_ux_designer default,
+        # which fetched designer jobs for HR/other users, 2026-07 Vini bug).
+        primary = resolve_user_category(u) or "ui_ux_designer"
+        categories = [primary]
         categories += [c.strip() for c in (u.get("secondary_categories") or []) if c and c.strip()]
         resolved = []
         for raw in (u.get("preferred_locations") or [])[:MAX_FETCH_LOCATIONS_PER_USER * 2]:
@@ -250,12 +254,12 @@ async def run_fetch_and_match_jobs_only() -> dict:
     # secondary_categories is a newer column — degrade progressively so an
     # un-run migration costs the feature, never the whole fetch phase.
     try:
-        users = supabase.table("users").select("id, job_category, preferred_locations, secondary_categories").eq("is_active", True).execute().data or []
+        users = supabase.table("users").select("id, job_category, target_roles, preferred_locations, secondary_categories").eq("is_active", True).execute().data or []
     except Exception:
         try:
-            users = supabase.table("users").select("id, job_category, preferred_locations").eq("is_active", True).execute().data or []
+            users = supabase.table("users").select("id, job_category, target_roles, preferred_locations").eq("is_active", True).execute().data or []
         except Exception:
-            users = supabase.table("users").select("id, job_category").eq("is_active", True).execute().data or []
+            users = supabase.table("users").select("id, job_category, target_roles").eq("is_active", True).execute().data or []
     categories = sorted({(u.get("job_category") or "").strip() or "ui_ux_designer" for u in users})
 
     total_fetched = 0

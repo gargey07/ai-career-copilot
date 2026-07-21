@@ -382,14 +382,29 @@ async def _rematch_user(user_id: str) -> None:
     from jobs.fetchers import resolve_fetch_location, run_all_fetchers
     from core.matcher import match_jobs_for_user, store_matches
 
+    from core.skill_maps import resolve_user_category
+
     supabase = get_supabase()
     try:
-        resp = supabase.table("users").select("job_category, preferred_locations").eq("id", user_id).single().execute()
+        resp = supabase.table("users").select("job_category, target_roles, preferred_locations").eq("id", user_id).single().execute()
         row = resp.data or {}
     except Exception as e:
         logger.error(f"   Re-match: couldn't load user {user_id}: {e}")
         return
     category = (row.get("job_category") or "").strip()
+    if not category:
+        # A blank category is the #1 cause of a stuck-at-zero user (it
+        # defaults every downstream step to ui_ux_designer). Derive one
+        # from their roles and PERSIST it so tonight's pipeline and future
+        # runs use it too — not just this one button click.
+        inferred = resolve_user_category(row)
+        if inferred:
+            category = inferred
+            try:
+                supabase.table("users").update({"job_category": inferred}).eq("id", user_id).execute()
+                logger.info(f"   🔧 Re-match: set empty job_category to inferred '{inferred}' for {user_id}")
+            except Exception as e:
+                logger.warning(f"   Couldn't persist inferred category ({e}) — using it for this run anyway.")
     location = next(
         (loc for raw in (row.get("preferred_locations") or []) if (loc := resolve_fetch_location(raw))),
         None,

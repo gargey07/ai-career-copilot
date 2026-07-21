@@ -84,8 +84,15 @@ def _user_categories(user: dict) -> set[str]:
     """Primary job_category plus any secondary_categories ("also open to")
     the user chose. All of them count as the user's profession for the
     relevance gate — a fullstack dev open to backend roles should see
-    backend-tagged jobs, and only these categories, not everything."""
-    cats = {(user.get("job_category") or "").strip()}
+    backend-tagged jobs, and only these categories, not everything.
+
+    When job_category is EMPTY, fall back to one inferred from target_roles
+    (skill_maps.resolve_user_category) — a user with real HR roles but a
+    blank category must still gate to HR, not to nothing (which passes no
+    jobs) nor to the ui_ux_designer default."""
+    from core.skill_maps import resolve_user_category
+    primary = resolve_user_category(user) or ""
+    cats = {primary.strip()}
     cats |= {(c or "").strip() for c in (user.get("secondary_categories") or [])}
     return {c for c in cats if c}
 

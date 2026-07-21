@@ -414,6 +414,86 @@ async def _rematch_user(user_id: str) -> None:
         logger.warning(f"   Re-match resume generation failed for {user_id}: {e}")
 
 
+@router.get("/users/{user_id}/match-funnel")
+async def user_match_funnel(user_id: str, token: str = Query(..., description="Admin token")):
+    """
+    Read-only "why does this user have zero matches?" funnel. Replays the
+    matcher's gates over the CURRENT job pool and reports how many jobs
+    survive each stage — turning "still empty, don't know why" into "died
+    at stage X". Also echoes the user's real profile values (category,
+    experience level, locations) so a mis-set category shows immediately.
+    Touches nothing; safe to run anytime.
+    """
+    _require_admin(token)
+    from core.matcher import (
+        _user_categories, _category_terms, _category_relevant,
+        _experience_ok, _job_required_months,
+    )
+
+    supabase = get_supabase()
+    try:
+        user = (supabase.table("users").select("*").eq("id", user_id).single().execute()).data or {}
+    except Exception as e:
+        raise HTTPException(404, f"Couldn't load user: {e}")
+
+    category = (user.get("job_category") or "").strip()
+    level = (user.get("experience_level") or "").strip()
+    cats = _user_categories(user)
+    terms = _category_terms(user)
+
+    # Jobs stored specifically for this user's category tag.
+    tagged = 0
+    try:
+        r = supabase.table("jobs").select("id", count="exact").eq("search_category", category).limit(1).execute()
+        tagged = getattr(r, "count", 0) or 0
+    except Exception:
+        pass
+
+    # Replay the gates over the recent pool (same window the keyword
+    # fallback scans), so this reflects what a real match run would see.
+    try:
+        pool = (supabase.table("jobs").select("id, title, search_category, seniority_level, required_experience_months, description")
+                .order("collected_at", desc=True).limit(300).execute()).data or []
+    except Exception:
+        pool = (supabase.table("jobs").select("id, title, search_category, description")
+                .order("collected_at", desc=True).limit(300).execute()).data or []
+
+    passed_category = [j for j in pool if _category_relevant(j, cats, terms)]
+    passed_experience = [j for j in passed_category if _experience_ok(j, level)]
+
+    def _titles(rows):
+        return [r.get("title") for r in rows[:5] if r.get("title")]
+
+    return {
+        "user": {
+            "name": user.get("name"),
+            "email": user.get("email"),
+            "job_category": category or "(none set)",
+            "experience_level": level or "(none set)",
+            "preferred_locations": user.get("preferred_locations") or [],
+            "target_roles": user.get("target_roles") or [],
+            "has_resume_text": bool(user.get("resume_text")),
+        },
+        "funnel": {
+            "jobs_stored_for_category_tag": tagged,
+            "recent_pool_scanned": len(pool),
+            "passed_category_gate": len(passed_category),
+            "passed_experience_gate": len(passed_experience),
+        },
+        "sample_surviving_titles": _titles(passed_experience),
+        "sample_category_only_titles": _titles(passed_category),
+        "diagnosis": (
+            "No jobs stored for this category yet — click 'Fetch & match now' for this user."
+            if tagged == 0 and len(passed_category) == 0
+            else "Jobs exist and pass the category gate, but the experience gate removes them — check the user's experience level vs the jobs' requirements."
+            if len(passed_category) > 0 and len(passed_experience) == 0
+            else "Jobs survive every gate — if the dashboard is still empty, the match run hasn't stored them yet (click 'Fetch & match now')."
+            if len(passed_experience) > 0
+            else "Jobs exist in the pool but none match this category — the category tag or the user's category may be mismatched."
+        ),
+    }
+
+
 @router.post("/users/{user_id}/rematch")
 async def rematch_user_now(user_id: str, background_tasks: BackgroundTasks, token: str = Query(..., description="Admin token")):
     """Fetch jobs for this ONE user's category + city, match them, and

@@ -160,10 +160,19 @@ function DeleteUserButton({ token, userId, email, onDeleted }: { token: string; 
 }
 
 // Fetch + match + generate for ONE user on demand — the fix for a person
-// stuck at zero jobs (first user in a never-fetched category). Faster and
-// more reliable than the whole-pipeline trigger.
+// stuck at zero jobs (first user in a never-fetched category) — plus a
+// read-only funnel that says exactly where their jobs die.
+interface MatchFunnel {
+  user: { job_category: string; experience_level: string; preferred_locations: string[]; has_resume_text: boolean };
+  funnel: { jobs_stored_for_category_tag: number; recent_pool_scanned: number; passed_category_gate: number; passed_experience_gate: number };
+  sample_surviving_titles: string[];
+  diagnosis: string;
+}
+
 function RematchButton({ token, userId }: { token: string; userId: string }) {
   const [state, setState] = useState<"idle" | "running" | "started">("idle");
+  const [funnel, setFunnel] = useState<MatchFunnel | null>(null);
+  const [checking, setChecking] = useState(false);
 
   const run = async () => {
     setState("running");
@@ -176,18 +185,58 @@ function RematchButton({ token, userId }: { token: string; userId: string }) {
     }
   };
 
+  const diagnose = async () => {
+    setChecking(true);
+    try {
+      const res = await fetch(`${API_URL}/api/admin/users/${userId}/match-funnel?token=${encodeURIComponent(token)}`);
+      setFunnel(res.ok ? await res.json() : null);
+    } finally {
+      setChecking(false);
+    }
+  };
+
   return (
-    <button
-      type="button"
-      onClick={run}
-      disabled={state !== "idle"}
-      title="Fetch jobs for this user's category + city, match them, and generate resumes now"
-      className="inline-flex items-center gap-1 text-xs font-medium hover:underline disabled:opacity-60"
-      style={{ color: "var(--primary)" }}
-    >
-      <RefreshCw size={12} strokeWidth={2} className={state === "running" ? "animate-spin" : ""} />
-      {state === "running" ? "Starting…" : state === "started" ? "Fetching… (refresh in ~30s)" : "Fetch & match now"}
-    </button>
+    <span className="inline-flex flex-col items-start gap-1">
+      <span className="inline-flex items-center gap-3">
+        <button
+          type="button"
+          onClick={run}
+          disabled={state !== "idle"}
+          title="Fetch jobs for this user's category + city, match them, and generate resumes now"
+          className="inline-flex items-center gap-1 text-xs font-medium hover:underline disabled:opacity-60"
+          style={{ color: "var(--primary)" }}
+        >
+          <RefreshCw size={12} strokeWidth={2} className={state === "running" ? "animate-spin" : ""} />
+          {state === "running" ? "Starting…" : state === "started" ? "Fetching… (refresh in ~30s)" : "Fetch & match now"}
+        </button>
+        <button
+          type="button"
+          onClick={diagnose}
+          disabled={checking}
+          title="Read-only: shows how many jobs survive each matching gate for this user"
+          className="text-xs font-medium hover:underline disabled:opacity-60"
+          style={{ color: "var(--text-muted)" }}
+        >
+          {checking ? "Checking…" : "Why no jobs?"}
+        </button>
+      </span>
+      {funnel && (
+        <div className="text-xs p-2 rounded-md max-w-md" style={{ background: "var(--surface-muted)", color: "var(--text-muted)" }}>
+          <div style={{ color: "var(--text)" }}>
+            {funnel.user.job_category} · {funnel.user.experience_level} · {funnel.user.preferred_locations.join(", ") || "no location"}
+          </div>
+          <div className="mt-1">
+            Stored for category: <strong>{funnel.funnel.jobs_stored_for_category_tag}</strong> ·
+            pass category gate: <strong>{funnel.funnel.passed_category_gate}</strong> ·
+            pass experience gate: <strong>{funnel.funnel.passed_experience_gate}</strong>
+          </div>
+          {funnel.sample_surviving_titles.length > 0 && (
+            <div className="mt-1 truncate">e.g. {funnel.sample_surviving_titles.slice(0, 3).join(" · ")}</div>
+          )}
+          <div className="mt-1" style={{ color: "#B45309" }}>{funnel.diagnosis}</div>
+        </div>
+      )}
+    </span>
   );
 }
 

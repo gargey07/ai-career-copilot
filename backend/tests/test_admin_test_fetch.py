@@ -59,10 +59,12 @@ def _patch(monkeypatch, titles_by_query, stored_count=7, budget_ok=True):
 
 
 def test_fetch_reports_raw_vs_filtered_counts(monkeypatch):
-    # "HR Manager" returns 3 raw of which 2 pass the title filter;
-    # "Recruiter" returns recruiter titles that all pass.
+    # "HR" returns 3 raw of which 2 pass the title filter; "Recruiter"
+    # returns recruiter titles that all pass. (hr_recruiter's first three
+    # queries are HR / Human Resources / Recruiter.)
     _patch(monkeypatch, {
-        "HR Manager": ["HR Executive", "HR Generalist", "Office Cleaner"],
+        "HR": ["HR Executive", "HR Generalist", "Office Cleaner"],
+        "Human Resources": ["Human Resources Executive"],
         "Recruiter": ["Senior Recruiter"],
     })
 
@@ -71,10 +73,11 @@ def test_fetch_reports_raw_vs_filtered_counts(monkeypatch):
     assert result["category"] == "hr_recruiter"
     assert result["jobs_stored_for_category"] == 7
     by_query = {r["query"]: r for r in result["results"]}
-    hr = by_query["HR Manager"]
+    hr = by_query["HR"]
     assert hr["adzuna_raw"] == 3
     assert hr["passed_title_filter"] == 2  # Office Cleaner rejected
     assert "Office Cleaner" not in hr["sample_passing_titles"]
+    assert by_query["Human Resources"]["passed_title_filter"] == 1
     assert by_query["Recruiter"]["passed_title_filter"] == 1
 
 

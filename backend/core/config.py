@@ -42,7 +42,11 @@ class Settings(BaseSettings):
     # run (was hardcoded to 1) — a deeper per-category pool means fewer
     # "no relevant jobs today" digests now that matching enforces category
     # relevance instead of padding with other categories' jobs.
-    fetch_queries_per_category: int = 2
+    # 3 (was 2): two queries missed each category's third title family
+    # (e.g. HR's "Human Resources ..." / "Talent Acquisition ..." bucket).
+    # One extra Adzuna call per category+location per run — small at beta
+    # scale, and the global adzuna_daily_limit still caps total spend.
+    fetch_queries_per_category: int = 3
 
     # Supabase
     supabase_url: str = ""

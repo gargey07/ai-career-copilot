@@ -283,10 +283,19 @@ JOB_CATEGORIES = {
     },
     "hr_recruiter": {
         "label": "HR / Recruiting",
-        "search_queries": ["HR Manager", "Recruiter", "Talent Acquisition"],
+        # Real-world HR titles split across three word families the fetch
+        # title filter treats separately: "HR ..." (has 'hr'), "Human
+        # Resources ..." (has 'human'/'resources'), and the recruiting side
+        # ("Recruiter", "Talent Acquisition"). Two queries alone missed the
+        # entire "Human Resources ..." / "Talent Acquisition ..." bucket —
+        # the most common phrasing on Indian boards — so an HR seeker saw a
+        # thin feed. Order = highest-yield first (only the first
+        # fetch_queries_per_category run).
+        "search_queries": ["HR", "Human Resources", "Recruiter", "Talent Acquisition"],
         "target_roles": [
-            "HR Manager", "Recruiter", "Talent Acquisition Specialist",
+            "HR Manager", "HR Executive", "Recruiter", "Talent Acquisition Specialist",
             "HR Business Partner", "People Operations", "HR Generalist",
+            "Human Resources Manager", "Recruitment Consultant", "Hiring Manager",
         ],
         "tools": [
             "Workday", "Greenhouse", "Lever", "BambooHR", "LinkedIn Recruiter",

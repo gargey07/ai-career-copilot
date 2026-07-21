@@ -369,6 +369,66 @@ async def test_fetch(
     }
 
 
+async def _rematch_user(user_id: str) -> None:
+    """
+    Targeted fetch + match + resume generation for ONE user — the admin
+    "this specific person has no jobs" fix. Faster and more reliable than
+    the whole-pipeline trigger (one category + location, not every user's),
+    so it finishes before a redeploy can interrupt it. Fetches the top
+    fetch_queries_per_category queries (more than signup's single query),
+    then reuses the exact instant-match + generate path. Best-effort
+    throughout — logs and moves on, never raises."""
+    from core.pipeline_runner import _queries_for_category, generate_resumes_for_user
+    from jobs.fetchers import resolve_fetch_location, run_all_fetchers
+    from core.matcher import match_jobs_for_user, store_matches
+
+    supabase = get_supabase()
+    try:
+        resp = supabase.table("users").select("job_category, preferred_locations").eq("id", user_id).single().execute()
+        row = resp.data or {}
+    except Exception as e:
+        logger.error(f"   Re-match: couldn't load user {user_id}: {e}")
+        return
+    category = (row.get("job_category") or "").strip()
+    location = next(
+        (loc for raw in (row.get("preferred_locations") or []) if (loc := resolve_fetch_location(raw))),
+        None,
+    )
+    if category:
+        for query in _queries_for_category(category)[: settings.fetch_queries_per_category]:
+            try:
+                fetched = await run_all_fetchers(query=query, category=category, location=location)
+                logger.info(f"   🔧 Admin re-match fetch '{category}' / '{query}': {fetched} new jobs")
+            except Exception as e:
+                logger.warning(f"   Re-match fetch failed ('{query}'): {e}")
+    try:
+        matches = await match_jobs_for_user(user_id)
+        stored = await store_matches(user_id, matches)
+        logger.info(f"   🔧 Admin re-match for {user_id}: {stored} matches stored")
+    except Exception as e:
+        logger.error(f"   Re-match matching failed for {user_id}: {e}")
+        return
+    try:
+        await generate_resumes_for_user(user_id)
+    except Exception as e:
+        logger.warning(f"   Re-match resume generation failed for {user_id}: {e}")
+
+
+@router.post("/users/{user_id}/rematch")
+async def rematch_user_now(user_id: str, background_tasks: BackgroundTasks, token: str = Query(..., description="Admin token")):
+    """Fetch jobs for this ONE user's category + city, match them, and
+    generate resumes — the fix for a single user stuck at zero jobs
+    (e.g. the first person in a never-fetched category). Runs in the
+    background; refresh the user's row after ~30s."""
+    _require_admin(token)
+    background_tasks.add_task(_audit, "user_rematched", user_id)
+    background_tasks.add_task(_rematch_user, user_id)
+    return {
+        "status": "started",
+        "message": "Fetching + matching this user now — refresh their row in about 30 seconds.",
+    }
+
+
 @router.post("/classify-experience-ai")
 async def classify_experience_ai_now(background_tasks: BackgroundTasks, token: str = Query(..., description="Admin token")):
     """AI fallback classification for jobs the free regex/title backfills

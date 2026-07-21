@@ -159,6 +159,38 @@ function DeleteUserButton({ token, userId, email, onDeleted }: { token: string; 
   );
 }
 
+// Fetch + match + generate for ONE user on demand — the fix for a person
+// stuck at zero jobs (first user in a never-fetched category). Faster and
+// more reliable than the whole-pipeline trigger.
+function RematchButton({ token, userId }: { token: string; userId: string }) {
+  const [state, setState] = useState<"idle" | "running" | "started">("idle");
+
+  const run = async () => {
+    setState("running");
+    try {
+      const res = await fetch(`${API_URL}/api/admin/users/${userId}/rematch?token=${encodeURIComponent(token)}`, { method: "POST" });
+      setState(res.ok ? "started" : "idle");
+      if (res.ok) setTimeout(() => setState("idle"), 30000);
+    } catch {
+      setState("idle");
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={run}
+      disabled={state !== "idle"}
+      title="Fetch jobs for this user's category + city, match them, and generate resumes now"
+      className="inline-flex items-center gap-1 text-xs font-medium hover:underline disabled:opacity-60"
+      style={{ color: "var(--primary)" }}
+    >
+      <RefreshCw size={12} strokeWidth={2} className={state === "running" ? "animate-spin" : ""} />
+      {state === "running" ? "Starting…" : state === "started" ? "Fetching… (refresh in ~30s)" : "Fetch & match now"}
+    </button>
+  );
+}
+
 // T-023: per-user limit overrides — blank = use the global default.
 // Saves on Enter/blur only when a value actually changed.
 function OverridesEditor({ token, user, onSaved }: { token: string; user: AdminUserRow; onSaved: () => void }) {
@@ -1040,6 +1072,7 @@ export default function AdminClient() {
                               >
                                 Inspect quality
                               </a>
+                              <RematchButton token={token} userId={u.id} />
                               <DeleteUserButton token={token} userId={u.id} email={u.email} onDeleted={() => load(token)} />
                             </div>
                           </td>

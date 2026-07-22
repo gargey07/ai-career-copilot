@@ -481,17 +481,22 @@ async def confirm_profile(payload: ConfirmProfileRequest, request: Request, back
     profile_dict = payload.model_dump()
     resume_text = build_resume_text_from_profile(profile_dict)
 
-    # Safety net for a blank category (an older client, the resume-upload
-    # path, or any flow that skipped the picker): derive one from the
-    # target roles so the user never lands with an empty category and zero
-    # matches. The frontend now requires it, but the backend must not trust
-    # that — this is the last line of defense.
-    job_category = payload.job_category or None
+    # The user now tells us their role once — a category tile OR target
+    # roles. When they used roles only, derive the category here so the
+    # user never lands with an empty category and zero matches. Order:
+    # (1) an explicit category, (2) inferred from the roles, (3) the first
+    # role itself as a free-text category (the pipeline searches free-text
+    # categories directly) — so this is NEVER blank when any role exists.
+    job_category = (payload.job_category or "").strip() or None
     if not job_category and payload.target_roles:
         from core.skill_maps import infer_category_from_roles
-        job_category = infer_category_from_roles(payload.target_roles)
+        job_category = (
+            infer_category_from_roles(payload.target_roles)
+            or (payload.target_roles[0] or "").strip()
+            or None
+        )
         if job_category:
-            logger.info(f"   Derived blank job_category as '{job_category}' from target_roles")
+            logger.info(f"   Set job_category to '{job_category}' from target_roles (no tile picked)")
 
     row = {
         "email": payload.basic_info.email,

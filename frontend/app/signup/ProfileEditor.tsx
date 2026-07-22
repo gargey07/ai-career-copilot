@@ -134,14 +134,16 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
     }));
   };
 
-  // job_category is REQUIRED: it's the whole basis of job fetching. Without
-  // it every downstream step defaults to the wrong profession and the user
-  // gets zero (or wrong) matches — the recurring "new user, no jobs" cause.
-  const hasCategory = !!profile.job_category.trim();
+  // The user must tell us their job role(s) — that's the whole basis of
+  // job fetching, and without it they get zero/wrong matches. It counts
+  // whether they picked a category tile (which seeds a role) OR typed
+  // roles directly, so it's a SINGLE thing to fill, not two. The backend
+  // derives job_category from the roles when the tile wasn't used.
+  const hasJobIntent = profile.target_roles.length > 0 || !!profile.job_category.trim();
   const canSubmit =
     !!profile.basic_info.full_name.trim() &&
     !!profile.basic_info.email.trim() &&
-    hasCategory &&
+    hasJobIntent &&
     !loading;
 
   // Strategy: users can move items between Projects and Experience — e.g.
@@ -240,10 +242,11 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
       </SectionCard>
 
       {/* Job Category */}
-      <SectionCard icon={Briefcase} title="What kind of jobs are you looking for?">
+      <SectionCard icon={Briefcase} title="What jobs are you looking for?">
         <p className="text-sm -mt-3 mb-4" style={{ color: "var(--text-muted)" }}>
-          This sets your main search — we fetch jobs for this category. (You can add specific
-          job titles below, and other categories you're also open to.)
+          Pick a category below, OR just add your job title(s) under &quot;Target roles&quot;
+          further down — add as many as you like. We&apos;ll set your search from whichever
+          you use, so you only need to tell us once.
         </p>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           {JOB_CATEGORIES.map((cat) => {
@@ -428,7 +431,7 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
       {/* Roles / Skills / Tools / Locations */}
       <SectionCard icon={Target} title="Roles, Skills & Tools" action={<RecommendedChip />}>
         <div className="space-y-6">
-          <SearchSelect label="Target roles" values={profile.target_roles} onChange={(v) => update("target_roles", v)} apiField="roles" helperText="Specific titles within your category — add a few variants (e.g. 'Frontend Developer', 'React Developer') to widen matching." />
+          <SearchSelect label="Target roles" values={profile.target_roles} onChange={(v) => update("target_roles", v)} apiField="roles" helperText="The job titles you want — add as many as you like (e.g. 'HR Executive', 'Recruiter'). If you didn't pick a category above, we set your search from these." />
           <SearchSelect label="Tools" values={profile.tools} onChange={(v) => update("tools", v)} apiField="tools" helperText='Our AI expands these — e.g. "Figma" → Prototyping, Dev Handoff.' />
           <SearchSelect label="Skills" values={profile.skills} onChange={(v) => update("skills", v)} apiField="skills" />
           <SearchSelect
@@ -485,9 +488,9 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
         </div>
       )}
 
-      {!hasCategory && (
+      {!hasJobIntent && (
         <p className="text-center text-sm" style={{ color: "var(--coral)" }}>
-          Pick the kind of jobs you&apos;re looking for above — that&apos;s what we search for you.
+          Tell us your job role(s) above — pick a category or add target roles. That&apos;s what we search for you.
         </p>
       )}
       <Button variant="primary" size="lg" disabled={!canSubmit} onClick={handleConfirm} className="w-full">

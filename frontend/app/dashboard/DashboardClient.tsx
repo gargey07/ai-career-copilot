@@ -46,9 +46,15 @@ interface Job {
   seniority_level?: string | null;
 }
 
-// Experience the job asks for, from real extracted data only — null when we
-// genuinely don't know (and then we show nothing rather than guessing).
-function formatExperience(job: Job): string | null {
+// True only when the posting states an experience requirement we could read.
+function experienceKnown(job: Job): boolean {
+  return (job.required_experience_months != null && job.required_experience_months > 0)
+    || ["entry", "mid", "senior", "lead"].includes((job.seniority_level || "").toLowerCase());
+}
+
+// Experience the job asks for, from real extracted data only. Honest
+// "Experience not stated" when the posting didn't say — never a guess.
+function formatExperience(job: Job): string {
   if (job.required_experience_months != null && job.required_experience_months > 0) {
     const years = job.required_experience_months / 12;
     const value = Number.isInteger(years) ? years : Math.round(years * 10) / 10;
@@ -59,7 +65,7 @@ function formatExperience(job: Job): string | null {
   if (level === "mid") return "Mid level";
   if (level === "senior") return "Senior level";
   if (level === "lead") return "Lead level";
-  return null;
+  return "Experience not stated";
 }
 
 // Components the matcher actually computed for this row — never decorative
@@ -143,6 +149,7 @@ interface User {
   target_roles: string[];
   profile_strength?: number;
   preferred_digest_time?: string | null;
+  hide_unknown_experience?: boolean;
 }
 
 // TICKET-008: optional reason chips on a thumbs-down — never required,
@@ -1932,6 +1939,11 @@ function DashboardContent() {
   // the saved preferred_locations. "" = off, "__remote__" = remote jobs,
   // anything else = exact location string from the loaded jobs.
   const [locationFilter, setLocationFilter] = useState("");
+  // "Only jobs I clearly qualify for" — hides jobs whose experience
+  // requirement we couldn't read. Seeded from the saved preference once the
+  // dashboard loads; toggling it filters instantly AND persists so future
+  // matching + the digest honor it too.
+  const [hideUnknownExp, setHideUnknownExp] = useState(false);
   // Today's list is capped by default — pipeline re-runs in a single day
   // can pile up dozens of matches and bury the page.
   const [showAllToday, setShowAllToday] = useState(false);
@@ -1978,6 +1990,7 @@ function DashboardContent() {
         setUser(user);
         setToken(activeToken);
         setAllJobs(jobs);
+        setHideUnknownExp(!!user.hide_unknown_experience);
         // Remember the working token so /dashboard works without the URL param next time.
         saveStoredProfile({ id: user.id, name: user.name || "", token: activeToken });
       })
@@ -2069,7 +2082,13 @@ function DashboardContent() {
   // Applying the filter up here means today/ready/history views all
   // respect it (and it composes with the Resumes Ready filter); the
   // applications tracker below deliberately stays unfiltered.
-  const visibleJobs = locationFilter ? allJobs.filter(matchesLocation) : allJobs;
+  // The experience toggle hides jobs whose requirement we couldn't read —
+  // instant client-side view; the saved preference (persisted below) also
+  // narrows future matching + the digest email. A user's own added jobs
+  // are never hidden by it (they chose them).
+  const passesExperienceFilter = (m: UserJob) =>
+    !hideUnknownExp || m.jobs.source === "user_submitted" || experienceKnown(m.jobs);
+  const visibleJobs = allJobs.filter((m) => matchesLocation(m) && passesExperienceFilter(m));
 
   // Jobs the user added themselves (AddJobPanel) get their own section —
   // mixing them into "Today's matches" would present the user's own
@@ -2267,6 +2286,29 @@ function DashboardContent() {
               </span>
             )}
           </div>
+        )}
+
+        {/* "Only jobs I clearly qualify for" — hides postings whose
+            experience requirement we couldn't read. Off by default; the
+            saved preference also narrows future matching + the digest. */}
+        {allJobs.length > 0 && (
+          <label className="flex items-center gap-2 mb-6 cursor-pointer select-none" style={{ color: "var(--text-muted)" }}>
+            <input
+              type="checkbox"
+              checked={hideUnknownExp}
+              onChange={(e) => {
+                const next = e.target.checked;
+                setHideUnknownExp(next);
+                // Persist so future matching + the digest honor it too.
+                fetch(`${API_URL}/api/users/${user.id}/preferences?t=${encodeURIComponent(token)}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ hide_unknown_experience: next }),
+                }).catch(() => { /* view filter already applied; retry on next toggle */ });
+              }}
+            />
+            <span className="text-sm">Only show jobs that state an experience requirement I qualify for</span>
+          </label>
         )}
 
         {showOnlyReady ? (

@@ -70,7 +70,9 @@ class DashboardLinkRequest(BaseModel):
 
 
 class PreferencesUpdate(BaseModel):
-    preferred_digest_time: str
+    # Both optional so the endpoint can update either independently.
+    preferred_digest_time: str | None = None
+    hide_unknown_experience: bool | None = None
 
 
 def compute_profile_strength(user: dict) -> int:
@@ -115,6 +117,7 @@ async def get_dashboard(user_id: str, t: str = Query("", description="Signed das
     # outright the moment either column is missing.
     user_resp = None
     for fields in (
+        f"{base_fields}, projects, preferred_digest_time, hide_unknown_experience",
         f"{base_fields}, projects, preferred_digest_time",
         f"{base_fields}, projects",
         base_fields,
@@ -191,6 +194,7 @@ async def get_dashboard(user_id: str, t: str = Query("", description="Signed das
         "target_roles": full_user.get("target_roles") or [],
         "profile_strength": compute_profile_strength(full_user),
         "preferred_digest_time": full_user.get("preferred_digest_time"),
+        "hide_unknown_experience": bool(full_user.get("hide_unknown_experience")),
     }
     return {"user": user, "jobs": jobs}
 
@@ -308,15 +312,33 @@ async def request_dashboard_link(payload: DashboardLinkRequest, request: Request
 
 @router.patch("/{user_id}/preferences")
 async def update_preferences(user_id: str, payload: PreferencesUpdate, t: str = Query("")):
-    """T-012: Update user's preferred digest time."""
+    """Update user preferences: digest time (T-012) and/or the
+    hide-unknown-experience toggle. Only the fields the client sent are
+    written, so each control updates independently."""
     _require_dashboard_token(user_id, t)
     supabase = get_supabase()
 
+    update: dict = {}
+    if payload.preferred_digest_time is not None:
+        update["preferred_digest_time"] = payload.preferred_digest_time
+    if payload.hide_unknown_experience is not None:
+        update["hide_unknown_experience"] = payload.hide_unknown_experience
+    if not update:
+        return {"status": "ok"}  # nothing to change
+
     try:
-        supabase.table("users").update({
-            "preferred_digest_time": payload.preferred_digest_time
-        }).eq("id", user_id).execute()
+        supabase.table("users").update(update).eq("id", user_id).execute()
     except Exception as e:
+        # hide_unknown_experience is a newer column — retry without it so a
+        # pre-migration DB still saves the digest time.
+        if "hide_unknown_experience" in update:
+            try:
+                slim = {k: v for k, v in update.items() if k != "hide_unknown_experience"}
+                if slim:
+                    supabase.table("users").update(slim).eq("id", user_id).execute()
+                return {"status": "ok", "warning": "experience filter not saved — column not migrated yet"}
+            except Exception:
+                pass
         logger.error(f"Failed to update preferences for {user_id}: {e}")
         raise HTTPException(500, "Could not save preferences.")
 

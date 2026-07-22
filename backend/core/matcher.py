@@ -215,13 +215,20 @@ def _job_band_index(job: dict) -> int | None:
     return _JOB_BAND_INDEX.get((job.get("seniority_level") or "").strip().lower())
 
 
-def _experience_ok(job: dict, user_level: str) -> bool:
+def _experience_ok(job: dict, user_level: str, hide_unknown: bool = False) -> bool:
     """
     Hard gate: False only when the job demonstrably asks for more
     experience than the user's band can stretch to. Unknown data (no
-    months, no seniority) passes — unknown is not disqualified — and
-    users with no/unrecognized level are never filtered.
+    months, no seniority) passes by default — unknown is not disqualified —
+    and users with no/unrecognized level are never filtered.
+
+    hide_unknown (the user's opt-in "only jobs I clearly qualify for"
+    toggle): when True, a job with NO readable experience signal is also
+    excluded. Off by default so the pool stays broad for everyone who
+    hasn't asked to narrow it.
     """
+    if hide_unknown and _job_band_index(job) is None:
+        return False
     level = (user_level or "").strip().lower()
     if level not in _USER_BAND_TOP_MONTHS:
         return True
@@ -616,6 +623,7 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
             user_categories = _user_categories(user)
             category_terms = _category_terms(user)
             user_level = user.get("experience_level") or ""
+            hide_unknown = bool(user.get("hide_unknown_experience"))
             job_ids = [j["id"] for j in jobs if j.get("id")]
             meta_by_id: dict[str, dict] | None = {}
             if job_ids:
@@ -645,7 +653,7 @@ async def match_jobs_for_user(user_id: str, limit: int = None) -> list[dict]:
                     j["required_experience_months"] = meta.get("required_experience_months")
                 relevant = [
                     j for j in jobs
-                    if _category_relevant(j, user_categories, category_terms) and _experience_ok(j, user_level)
+                    if _category_relevant(j, user_categories, category_terms) and _experience_ok(j, user_level, hide_unknown)
                 ]
                 no_exp_data = sum(1 for j in relevant if _job_band_index(j) is None)
                 if no_exp_data:
@@ -739,9 +747,10 @@ def keyword_match(
     user_categories = _user_categories(user)
     user_level = user.get("experience_level") or ""
     category_terms = _category_terms(user)
+    hide_unknown = bool(user.get("hide_unknown_experience"))
     candidates = [
         j for j in jobs
-        if _category_relevant(j, user_categories, category_terms) and _experience_ok(j, user_level)
+        if _category_relevant(j, user_categories, category_terms) and _experience_ok(j, user_level, hide_unknown)
     ]
     no_exp_data = sum(1 for j in candidates if _job_band_index(j) is None)
     if no_exp_data:

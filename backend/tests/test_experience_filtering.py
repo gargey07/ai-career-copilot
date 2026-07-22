@@ -194,3 +194,14 @@ def test_tolerance_boundary_also_tightened_for_junior_and_mid():
     # mid top=60: same pattern.
     assert _experience_ok({"required_experience_months": 60}, "mid") is True
     assert _experience_ok({"required_experience_months": 66}, "mid") is False
+
+
+def test_hide_unknown_toggle_excludes_no_signal_jobs_only_when_on():
+    # A job with NO readable experience signal passes by default (unknown is
+    # not disqualified) but is excluded when the user opts into hide_unknown.
+    unknown = {"required_experience_months": None, "seniority_level": None, "description": ""}
+    assert _experience_ok(unknown, "fresher") is True                    # default: shown
+    assert _experience_ok(unknown, "fresher", hide_unknown=True) is False  # toggle on: hidden
+    # A job WITH a signal the user qualifies for is unaffected by the toggle.
+    known_ok = {"required_experience_months": 12, "seniority_level": None}
+    assert _experience_ok(known_ok, "fresher", hide_unknown=True) is True

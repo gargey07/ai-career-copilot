@@ -348,6 +348,11 @@ ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS pdf_error_message TEXT;
 ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS saved_at          TIMESTAMPTZ;
 ALTER TABLE user_jobs ADD COLUMN IF NOT EXISTS user_notes        TEXT;
 
+-- User preference: when TRUE, hide jobs whose experience requirement we
+-- couldn't read (matching + digest exclude them). Default FALSE keeps the
+-- full breadth for everyone; the dashboard exposes a toggle.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS hide_unknown_experience BOOLEAN DEFAULT FALSE;
+
 -- Which job_category a job was fetched for — core/matcher.py uses this to
 -- stop cross-category matches (e.g. a UI/UX Designer job being shown to a
 -- Fullstack Developer with a plausible-looking score). Existing rows stay

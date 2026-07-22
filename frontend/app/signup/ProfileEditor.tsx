@@ -134,7 +134,15 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
     }));
   };
 
-  const canSubmit = !!profile.basic_info.full_name.trim() && !!profile.basic_info.email.trim() && !loading;
+  // job_category is REQUIRED: it's the whole basis of job fetching. Without
+  // it every downstream step defaults to the wrong profession and the user
+  // gets zero (or wrong) matches — the recurring "new user, no jobs" cause.
+  const hasCategory = !!profile.job_category.trim();
+  const canSubmit =
+    !!profile.basic_info.full_name.trim() &&
+    !!profile.basic_info.email.trim() &&
+    hasCategory &&
+    !loading;
 
   // Strategy: users can move items between Projects and Experience — e.g.
   // the parser filed a personal project as a job (or the reverse). Convert
@@ -477,6 +485,11 @@ export default function ProfileEditor({ initialProfile, resumeFilePath, onConfir
         </div>
       )}
 
+      {!hasCategory && (
+        <p className="text-center text-sm" style={{ color: "var(--coral)" }}>
+          Pick the kind of jobs you&apos;re looking for above — that&apos;s what we search for you.
+        </p>
+      )}
       <Button variant="primary" size="lg" disabled={!canSubmit} onClick={handleConfirm} className="w-full">
         {loading ? (
           <>
